@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Deepfocal - Raw Data View</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+
+    <h1>Deepfocal - Raw Data View</h1>
+    <p>This page is fetching data live from your Django API.</p>
+
+    <table id="reviews-table">
+        <thead>
+            <tr>
+                <th>Source</th>
+                <th>Author</th>
+                <th>Rating</th>
+                <th>Title</th>
+                <th>Sentiment</th>
+                <th>Score</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Data will be inserted here by JavaScript -->
+        </tbody>
+    </table>
+
+    <script>
+        // This is the URL of the API you just built. It must be exact.
+        const apiUrl = 'http://127.0.0.1:8000/api/reviews/';
+
+        // This function runs when the page loads
+        window.onload = function() {
+            const tableBody = document.querySelector('#reviews-table tbody');
+
+            fetch(apiUrl)
+                .then(response => {
+                    if (!response.ok) {
+                        // If the server responds with an error (like 404), throw an error
+                        throw new Error(`Network response was not ok. Status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // Check if data is an array and not empty
+                    if (!Array.isArray(data) || data.length === 0) {
+                        tableBody.innerHTML = '<tr><td colspan="6">No review data found.</td></tr>';
+                        return;
+                    }
+
+                    // Clear any previous messages
+                    tableBody.innerHTML = '';
+
+                    // Loop through each review in the data
+                    data.forEach(review => {
+                        const row = document.createElement('tr');
+
+                        // Create cells and put the data inside.
+                        // The 'toFixed(4)' method formats the score to 4 decimal places.
+                        row.innerHTML = `
+                            <td>${review.source}</td>
+                            <td>${review.author}</td>
+                            <td>${review.rating}</td>
+                            <td>${review.title}</td>
+                            <td>${review.sentiment_label}</td>
+                            <td>${review.sentiment_score ? review.sentiment_score.toFixed(4) : 'N/A'}</td>
+                        `;
+
+                        tableBody.appendChild(row);
+                    });
+                })
+                .catch(error => {
+                    // If anything goes wrong, log the error and show a message
+                    console.error('Error fetching data:', error);
+                    tableBody.innerHTML = `<tr><td colspan="6">Failed to load data. Error: ${error.message}. Is your Django server running and CORS configured?</td></tr>`;
+                });
+        };
+    </script>
+
+</body>
+</html>

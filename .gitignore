@@ -1,0 +1,12 @@
+# Virtual Environment
+venv/
+
+# Django project settings that might contain secrets
+deepfocal_backend/settings_local.py
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# IDE files
+.idea/
