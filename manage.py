@@ -20,3 +20,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# manage.py - verify this line
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'deepfocal_backend.settings_local')

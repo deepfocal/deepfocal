@@ -1,3 +1,5 @@
+from textblob import TextBlob
+
 from celery import shared_task
 from google_play_scraper import reviews, Sort
 from .models import Review
@@ -18,16 +20,18 @@ REVIEW_COUNT = 200 # Fetch the 200 most recent reviews
     retry_backoff=True,
     retry_backoff_max=300
 )
-def import_google_play_reviews():
+def import_google_play_reviews(app_id=None):
     """
     A Celery task to fetch the latest reviews from the Google Play Store
     and save them to the database, avoiding duplicates.
     """
-    logger.info(f"Starting Google Play reviews import for app_id: {APP_ID}")
+    if app_id is None:
+        app_id = APP_ID  # Use default if no app_id provided
+    logger.info(f"Starting Google Play reviews import for app_id: {app_id}")
 
     try:
         result, continuation_token = reviews(
-            APP_ID,
+            app_id,  # Use the parameter instead
             lang='en',
             country=APP_COUNTRY,
             sort=Sort.NEWEST,
@@ -47,18 +51,24 @@ def import_google_play_reviews():
 
     # This loop contains the "Smart De-duplication" logic
     for review_data in result:
+        # Calculate sentiment score
+        sentiment_score = TextBlob(review_data['content']).sentiment.polarity
+
         # get_or_create returns a tuple: (object, created)
         # `created` is a boolean: True if a new object was created, False otherwise.
         review_obj, created = Review.objects.get_or_create(
-            review_id=review_data['reviewId'], # The unique field to check
-            defaults={ # These fields are only used if a new object is created
+            review_id=review_data['reviewId'],  # The unique field to check
+            defaults={  # These fields are only used if a new object is created
                 'author': review_data['userName'],
                 'rating': review_data['score'],
                 'content': review_data['content'],
                 'created_at': review_data['at'],
-                'source': 'Google Play'
+                'source': 'Google Play',
+                'title': '',  # Add this since your model requires it
+                'sentiment_score': sentiment_score,  # Add sentiment analysis
+                'app_id': app_id,
             }
-        )
+                    )
 
         if created:
             new_reviews_count += 1
@@ -126,6 +136,9 @@ def import_apple_app_store_reviews():
         rating_node = entry.find('im:rating', namespaces)
         rating = int(rating_node.text) if rating_node is not None else 0
 
+        # Calculate sentiment score
+        sentiment_score = TextBlob(content).sentiment.polarity if content else 0.0
+
         review_obj, created = Review.objects.get_or_create(
             review_id=review_id,
             defaults={
@@ -133,7 +146,8 @@ def import_apple_app_store_reviews():
                 'title': title,
                 'content': content,
                 'rating': rating,
-                'source': 'Apple App Store'
+                'source': 'Apple App Store',
+                'sentiment_score': sentiment_score,
             }
         )
 
@@ -148,3 +162,36 @@ def import_apple_app_store_reviews():
 
     logger.info(summary)
     return summary
+
+def extract_pain_points():
+    """
+    Analyze reviews to identify top pain points based on negative sentiment and keywords.
+    Returns a list of pain points with frequency counts.
+    """
+    from collections import Counter
+
+    # Common pain point keywords grouped by category
+    pain_point_keywords = {
+        'crashes': ['crash', 'crashing', 'crashed', 'freeze', 'freezing', 'frozen', 'bug', 'bugs'],
+        'performance': ['slow', 'sluggish', 'lag', 'lagging', 'loading', 'takes forever', 'performance'],
+        'login_issues': ['login', 'log in', 'sign in', 'signin', 'password', 'authentication', 'cant login'],
+        'ui_problems': ['confusing', 'hard to use', 'difficult', 'interface', 'navigation', 'design'],
+        'missing_features': ['missing', 'need', 'should have', 'lacking', 'want', 'wish'],
+        'sync_issues': ['sync', 'syncing', 'synchronize', 'not saving', 'lost data']
+    }
+
+    # Get negative reviews (sentiment < -0.1 to focus on clearly negative ones)
+    negative_reviews = Review.objects.filter(sentiment_score__lt=-0.1)
+
+    pain_point_counts = Counter()
+
+    for review in negative_reviews:
+        content_lower = review.content.lower()
+
+        for category, keywords in pain_point_keywords.items():
+            for keyword in keywords:
+                if keyword in content_lower:
+                    pain_point_counts[category] += 1
+                    break  # Only count once per review per category
+
+    return pain_point_counts.most_common(3)
