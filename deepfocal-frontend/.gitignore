@@ -22,7 +22,7 @@ local_settings.py
 celerybeat-schedule
 celery.pid
 
-# Frontend/Node.js
+# Frontend/Node.js (your existing entries)
 logs
 *.log
 npm-debug.log*
@@ -35,7 +35,7 @@ dist
 dist-ssr
 *.local
 
-# Editor directories and files
+# Editor directories and files (your existing entries)
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -46,8 +46,12 @@ dist-ssr
 *.sln
 *.sw?
 
-# Additional files
+# Additional IDE files
 *.swp
 *.swo
+
+# OS files
 Thumbs.db
+
+# Application logs
 deepfocal.log
