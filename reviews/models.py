@@ -5,6 +5,7 @@ class Review(models.Model):
     """
     Represents a single customer review scraped from a public source.
     """
+    review_id = models.CharField(max_length=255, unique=True)
     source = models.CharField(max_length=100)  # e.g., 'Apple App Store', 'Google Play Store'
     author = models.CharField(max_length=255, null=True, blank=True)
     rating = models.IntegerField()
