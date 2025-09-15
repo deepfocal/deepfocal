@@ -1,12 +1,9 @@
-import ReviewList from './ReviewList'
+// src/App.jsx
+import Dashboard from './Dashboard'
 import './App.css'
 
 function App() {
-  return (
-    <div className="App">
-      <ReviewList />
-    </div>
-  )
+  return <Dashboard />
 }
 
 export default App
