@@ -10,7 +10,7 @@ function PainPointsCard() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const response = await axios.get('http://localhost:8000/api/insights/');
+        const response = await axios.get('http://localhost:8000/api/enhanced-insights/?app_id=com.microsoft.office.outlook');
         setData(response.data);
         setLoading(false);
       } catch (error) {
@@ -44,25 +44,25 @@ function PainPointsCard() {
         <Typography variant="h6" gutterBottom>
           Top Pain Points
         </Typography>
-        <Typography variant="body2" color="text.secondary" gutterBottom>
-          Most frequently mentioned issues in {data.sentiment_breakdown.negative_count} negative reviews
+<Typography variant="body2" color="text.secondary" gutterBottom>
+          LDA-discovered themes from {data.review_count_analyzed} negative reviews
         </Typography>
 
         <Box sx={{ mt: 2 }}>
-          {data.top_pain_points.length > 0 ? (
-            data.top_pain_points.map((painPoint, index) => (
+          {data.lda_pain_points && data.lda_pain_points.length > 0 ? (
+            data.lda_pain_points.map((painPoint, index) => (
               <Box key={index} sx={{ mb: 2, p: 2, border: '1px solid #e0e0e0', borderRadius: 1 }}>
                 <Typography variant="subtitle1" gutterBottom>
                   #{index + 1} {painPoint.issue}
                 </Typography>
                 <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                   <Chip
-                    label={`${painPoint.mentions} mentions`}
+                    label={`Keywords: ${painPoint.keywords.join(', ')}`}
                     color="warning"
                     variant="outlined"
                   />
                   <Chip
-                    label={`${painPoint.percentage_of_negative}% of negative reviews`}
+                    label={`Coherence: ${painPoint.coherence_score.toFixed(1)}`}
                     variant="outlined"
                   />
                 </Box>
@@ -70,11 +70,10 @@ function PainPointsCard() {
             ))
           ) : (
             <Typography variant="body2" color="text.secondary">
-              No significant pain points detected in current dataset.
+              No significant pain points detected.
             </Typography>
           )}
-        </Box>
-      </CardContent>
+        </Box>      </CardContent>
     </Card>
   );
 }

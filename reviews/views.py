@@ -1,4 +1,5 @@
 # file: reviews/views.py
+from .topic_modeling import analyze_app_topics
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .tasks import extract_pain_points
@@ -12,39 +13,30 @@ class ReviewListView(generics.ListAPIView):
 
 
 @api_view(['GET'])
-def insights_summary(request):
+def enhanced_insights_summary(request):
     """
-    API endpoint that returns business insights instead of raw reviews.
-    This is what transforms Deepfocal from a review aggregator to a BI tool.
+    Enhanced insights using LDA topic modeling instead of keyword matching
     """
-    # Get pain points
-    pain_points = extract_pain_points()
+    app_id = request.GET.get('app_id')  # Allow filtering by specific app
 
-    # Get basic metrics
-    total_reviews = Review.objects.filter(sentiment_score__isnull=False).count()
-    negative_reviews = Review.objects.filter(sentiment_score__lt=-0.1).count()
-    positive_reviews = Review.objects.filter(sentiment_score__gt=0.1).count()
+    # Get LDA-based pain points
+    if app_id:
+        lda_results = analyze_app_topics(app_id, sentiment_filter='negative')
+        pain_points = []
 
-    # Calculate percentages
-    negative_percentage = round((negative_reviews / total_reviews * 100), 1) if total_reviews > 0 else 0
-    positive_percentage = round((positive_reviews / total_reviews * 100), 1) if total_reviews > 0 else 0
+        if 'topics' in lda_results:
+            for topic in lda_results['topics'][:3]:  # Top 3 topics
+                pain_points.append({
+                    'issue': topic['label'],
+                    'keywords': topic['top_words'][:5],
+                    'coherence_score': topic['coherence_score']
+                })
 
+    # Return enhanced insights with LDA topics
     return Response({
-        'total_reviews_analyzed': total_reviews,
-        'sentiment_breakdown': {
-            'positive_percentage': positive_percentage,
-            'negative_percentage': negative_percentage,
-            'positive_count': positive_reviews,
-            'negative_count': negative_reviews
-        },
-        'top_pain_points': [
-            {
-                'issue': category.replace('_', ' ').title(),
-                'mentions': count,
-                'percentage_of_negative': round((count / negative_reviews * 100), 1) if negative_reviews > 0 else 0
-            }
-            for category, count in pain_points
-        ]
+        'lda_pain_points': pain_points,
+        'review_count_analyzed': lda_results.get('review_count', 0),
+        'app_id': app_id
     })
 
 

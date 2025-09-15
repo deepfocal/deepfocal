@@ -1,5 +1,4 @@
-from textblob import TextBlob
-
+from transformers import pipeline
 from celery import shared_task
 from google_play_scraper import reviews, Sort
 from .models import Review
@@ -50,9 +49,23 @@ def import_google_play_reviews(app_id=None):
     skipped_reviews_count = 0
 
     # This loop contains the "Smart De-duplication" logic
+    # Load sentiment analysis model ONCE before the loop
+    sentiment_pipeline = pipeline("sentiment-analysis",
+                                  model="nlptown/bert-base-multilingual-uncased-sentiment")
+
     for review_data in result:
         # Calculate sentiment score
-        sentiment_score = TextBlob(review_data['content']).sentiment.polarity
+        # Get sentiment prediction
+        sentiment_result = sentiment_pipeline(review_data['content'])
+
+        # Convert star ratings to -1 to +1 scale
+        label = sentiment_result[0]['label']
+        if label in ['4 stars', '5 stars']:  # 4-5 stars = positive
+            sentiment_score = sentiment_result[0]['score']
+        elif label in ['1 star', '2 stars']:  # 1-2 stars = negative
+            sentiment_score = -sentiment_result[0]['score']
+        else:  # 3 stars = neutral
+            sentiment_score = 0.0
 
         # get_or_create returns a tuple: (object, created)
         # `created` is a boolean: True if a new object was created, False otherwise.
@@ -124,6 +137,10 @@ def import_apple_app_store_reviews():
     new_reviews_count = 0
     skipped_reviews_count = 0
 
+    # Load sentiment analysis model ONCE before the loop
+    sentiment_pipeline = pipeline("sentiment-analysis",
+                                  model="nlptown/bert-base-multilingual-uncased-sentiment")
+
     # CORRECTED: We now use the namespace to find the 'atom:entry' tags.
     # We also skip the first entry which is the app title.
     for entry in root.findall('atom:entry', namespaces)[1:]:
@@ -136,8 +153,18 @@ def import_apple_app_store_reviews():
         rating_node = entry.find('im:rating', namespaces)
         rating = int(rating_node.text) if rating_node is not None else 0
 
-        # Calculate sentiment score
-        sentiment_score = TextBlob(content).sentiment.polarity if content else 0.0
+
+        # Get sentiment prediction
+        sentiment_result = sentiment_pipeline(content) if content else [{'label': '3 stars', 'score': 0.0}]
+
+        # Convert star ratings to -1 to +1 scale
+        label = sentiment_result[0]['label']
+        if label in ['4 stars', '5 stars']:  # 4-5 stars = positive
+            sentiment_score = sentiment_result[0]['score']
+        elif label in ['1 star', '2 stars']:  # 1-2 stars = negative
+            sentiment_score = -sentiment_result[0]['score']
+        else:  # 3 stars = neutral
+            sentiment_score = 0.0
 
         review_obj, created = Review.objects.get_or_create(
             review_id=review_id,
