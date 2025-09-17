@@ -3,14 +3,20 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, Typography, Box, Chip } from '@mui/material';
 import axios from 'axios';
 
-function PainPointsCard() {
+function PainPointsCard({ selectedProject, updateTrigger }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!selectedProject) {
+      setLoading(false);
+      return;
+    }
+
     const fetchData = async () => {
       try {
-        const response = await axios.get('http://localhost:8000/api/enhanced-insights/?app_id=com.microsoft.office.outlook');
+        setLoading(true);
+        const response = await axios.get(`http://localhost:8000/api/enhanced-insights/?app_id=${selectedProject.home_app_id}`);
         setData(response.data);
         setLoading(false);
       } catch (error) {
@@ -20,12 +26,20 @@ function PainPointsCard() {
     };
 
     fetchData();
-  }, []);
+  }, [selectedProject, updateTrigger]);
 
   if (loading) return (
     <Card>
       <CardContent>
         <Typography variant="h6">Loading pain points...</Typography>
+      </CardContent>
+    </Card>
+  );
+
+  if (!selectedProject) return (
+    <Card>
+      <CardContent>
+        <Typography variant="h6">Select a project to view pain points</Typography>
       </CardContent>
     </Card>
   );
@@ -42,9 +56,9 @@ function PainPointsCard() {
     <Card>
       <CardContent>
         <Typography variant="h6" gutterBottom>
-          Top Pain Points
+          Top Pain Points - {selectedProject.home_app_name}
         </Typography>
-<Typography variant="body2" color="text.secondary" gutterBottom>
+        <Typography variant="body2" color="text.secondary" gutterBottom>
           LDA-discovered themes from {data.review_count_analyzed} negative reviews
         </Typography>
 

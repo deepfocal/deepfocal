@@ -1,102 +1,258 @@
 from transformers import pipeline
 from celery import shared_task
 from google_play_scraper import reviews, Sort
-from .models import Review
+from .models import Review, TaskTracker, Project
 import logging
 import requests
 import xml.etree.ElementTree as ET
+from django.contrib.auth.models import User
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-# In a real app, you'd likely move these to a settings file or a model.
-APP_ID = 'com.google.android.apps.maps'
 APP_COUNTRY = 'us'
-REVIEW_COUNT = 200 # Fetch the 200 most recent reviews
+REVIEW_COUNT = 200  # Fetch per request (maximum 200 per request)
+
+# Subscription tier review limits
+SUBSCRIPTION_REVIEW_LIMITS = {
+    'free': 500,        # Free tier: 500 reviews max per app
+    'starter': 1000,    # Starter tier: 1000 reviews max per app (paid)
+    'pro': 1000,        # Pro tier: 1000 reviews max per app (paid)
+    'enterprise': 1000  # Enterprise: 1000 reviews max per app (paid)
+}
+
+# Hard system maximum - never collect more than this regardless of subscription
+HARD_SYSTEM_MAX_REVIEWS = 2000
 
 @shared_task(
-    autoretry_for=(requests.exceptions.RequestException,), # Use the full path
+    autoretry_for=(requests.exceptions.RequestException,),
     retry_kwargs={'max_retries': 3},
     retry_backoff=True,
-    retry_backoff_max=300
+    retry_backoff_max=300,
+    bind=True
 )
-def import_google_play_reviews(app_id=None):
+def collect_reviews_task(self, app_id, max_reviews, user_id=None, subscription_tier='free', app_name=None, task_type='quick'):
     """
-    A Celery task to fetch the latest reviews from the Google Play Store
-    and save them to the database, avoiding duplicates.
+    Enhanced task with persistent tracking using TaskTracker model.
     """
-    if app_id is None:
-        app_id = APP_ID  # Use default if no app_id provided
-    logger.info(f"Starting Google Play reviews import for app_id: {app_id}")
+    logger.info(f"Starting review collection for app: {app_id}, max: {max_reviews}, user: {user_id}, tier: {subscription_tier}")
 
+    # Get or create TaskTracker record
     try:
-        result, continuation_token = reviews(
-            app_id,  # Use the parameter instead
-            lang='en',
-            country=APP_COUNTRY,
-            sort=Sort.NEWEST,
-            count=REVIEW_COUNT
+        user = User.objects.get(id=user_id) if user_id else None
+        tracker = TaskTracker.objects.get(task_id=self.request.id)
+    except (TaskTracker.DoesNotExist, User.DoesNotExist):
+        # Create new tracker if not exists
+        tracker = TaskTracker.objects.create(
+            task_id=self.request.id,
+            task_type=task_type,
+            app_id=app_id,
+            app_name=app_name or app_id,
+            user=user,
+            target_reviews=max_reviews,
+            status='started'
         )
-    except Exception as e:
-        logger.error(f"Failed to fetch reviews from Google Play Store: {e}")
-        # We can re-raise the exception to make the task fail for retry logic later
-        raise
 
-    if not result:
-        logger.warning("No reviews were fetched from the Google Play Store.")
-        return "No reviews fetched."
+    # Update task as started
+    tracker.update_progress(0, max_reviews, 'started')
 
-    new_reviews_count = 0
-    skipped_reviews_count = 0
-
-    # This loop contains the "Smart De-duplication" logic
-    # Load sentiment analysis model ONCE before the loop
+    # Load sentiment analysis model
     sentiment_pipeline = pipeline("sentiment-analysis",
                                   model="nlptown/bert-base-multilingual-uncased-sentiment")
 
-    for review_data in result:
-        # Calculate sentiment score
-        # Get sentiment prediction
-        sentiment_result = sentiment_pipeline(review_data['content'])
+    total_new_reviews = 0
+    total_skipped_reviews = 0
+    total_processed = 0
+    continuation_token = None
+    page_count = 0
 
-        # Convert star ratings to -1 to +1 scale
-        label = sentiment_result[0]['label']
-        if label in ['4 stars', '5 stars']:  # 4-5 stars = positive
-            sentiment_score = sentiment_result[0]['score']
-        elif label in ['1 star', '2 stars']:  # 1-2 stars = negative
-            sentiment_score = -sentiment_result[0]['score']
-        else:  # 3 stars = neutral
-            sentiment_score = 0.0
+    while total_processed < max_reviews:
+        page_count += 1
+        remaining_needed = max_reviews - total_processed
+        count_for_request = min(REVIEW_COUNT, remaining_needed)
 
-        # get_or_create returns a tuple: (object, created)
-        # `created` is a boolean: True if a new object was created, False otherwise.
-        review_obj, created = Review.objects.get_or_create(
-            review_id=review_data['reviewId'],  # The unique field to check
-            defaults={  # These fields are only used if a new object is created
-                'author': review_data['userName'],
-                'rating': review_data['score'],
-                'content': review_data['content'],
-                'created_at': review_data['at'],
-                'source': 'Google Play',
-                'title': '',  # Add this since your model requires it
-                'sentiment_score': sentiment_score,  # Add sentiment analysis
+        logger.info(f"Fetching page {page_count}, requesting {count_for_request} reviews...")
+
+        try:
+            result, continuation_token = reviews(
+                app_id,
+                lang='en',
+                country=APP_COUNTRY,
+                sort=Sort.NEWEST,
+                count=count_for_request,
+                continuation_token=continuation_token
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch reviews from Google Play Store on page {page_count}: {e}")
+            break
+
+        if not result:
+            logger.info(f"No more reviews available after page {page_count}")
+            break
+
+        # Process reviews from this page
+        page_new_count = 0
+        page_skipped_count = 0
+
+        for review_data in result:
+            if total_processed >= max_reviews:
+                break
+
+            # Calculate sentiment score
+            content = review_data.get('content', '') or ''
+            if content.strip():
+                sentiment_result = sentiment_pipeline(content)
+                label = sentiment_result[0]['label']
+                if label in ['4 stars', '5 stars']:
+                    sentiment_score = sentiment_result[0]['score']
+                elif label in ['1 star', '2 stars']:
+                    sentiment_score = -sentiment_result[0]['score']
+                else:
+                    sentiment_score = 0.0
+            else:
+                rating = review_data.get('score', 3)
+                if rating >= 4:
+                    sentiment_score = 0.5
+                elif rating <= 2:
+                    sentiment_score = -0.5
+                else:
+                    sentiment_score = 0.0
+
+            # Save review
+            review_obj, created = Review.objects.get_or_create(
+                review_id=review_data['reviewId'],
+                defaults={
+                    'author': review_data.get('userName', ''),
+                    'rating': review_data.get('score', 3),
+                    'content': content,
+                    'created_at': review_data.get('at'),
+                    'source': 'Google Play',
+                    'title': '',
+                    'sentiment_score': sentiment_score,
+                    'app_id': app_id,
+                }
+            )
+
+            if created:
+                page_new_count += 1
+                total_new_reviews += 1
+            else:
+                page_skipped_count += 1
+                total_skipped_reviews += 1
+
+        total_processed = total_new_reviews + total_skipped_reviews
+        logger.info(f"Page {page_count} complete: {page_new_count} new, {page_skipped_count} duplicates")
+
+        # Update progress - both Celery state AND database tracker
+        progress_percent = min(100, int((total_processed / max_reviews) * 100))
+
+        # Update TaskTracker in database for persistent tracking
+        tracker.update_progress(total_processed, max_reviews, 'progress')
+
+        # Also update Celery state for immediate feedback
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'current_reviews': total_processed,
+                'total_reviews': max_reviews,
+                'new_reviews': total_new_reviews,
+                'skipped_reviews': total_skipped_reviews,
+                'progress_percent': progress_percent,
+                'page_count': page_count,
                 'app_id': app_id,
+                'app_name': tracker.app_name,
+                'task_type': tracker.task_type,
+                'status': f'Collecting reviews... {total_processed}/{max_reviews}'
             }
-                    )
+        )
 
-        if created:
-            new_reviews_count += 1
-        else:
-            skipped_reviews_count += 1
+        # Stopping conditions
+        if total_processed >= max_reviews:
+            logger.info(f"Reached target of {max_reviews} reviews")
+            break
+        if not continuation_token:
+            logger.info("No more pages available")
+            break
+        # More lenient duplicate stopping - only stop if we get NO new reviews on a page
+        # and we've collected at least the minimum target, to prevent early termination
+        minimum_before_duplicate_stop = int(max_reviews * 0.80) if max_reviews <= 300 else max_reviews - 100
+        if page_count > 3 and page_new_count == 0 and total_new_reviews >= minimum_before_duplicate_stop:
+            logger.info(f"No new reviews on page {page_count} and collected {total_new_reviews} (minimum: {minimum_before_duplicate_stop}), stopping")
+            break
+        # Only stop for insufficient results if we haven't reached our minimum target
+        # For quick analysis (200 reviews), don't stop early unless we have at least 150
+        minimum_for_early_stop = int(max_reviews * 0.75) if max_reviews <= 300 else max_reviews - 100
+        if len(result) < count_for_request:
+            if total_new_reviews < minimum_for_early_stop:
+                logger.info(f"Got {len(result)} but requested {count_for_request}, continuing to reach minimum {minimum_for_early_stop} (currently: {total_new_reviews})")
+                # Continue instead of breaking - we need more reviews
+            else:
+                logger.info(f"Got {len(result)} but requested {count_for_request}, acceptable since we have {total_new_reviews} reviews (minimum: {minimum_for_early_stop})")
+                break
 
-    summary = (f"Import complete. "
-               f"New reviews added: {new_reviews_count}. "
-               f"Duplicates skipped: {skipped_reviews_count}.")
-
+    summary = f"Collection complete for {app_id}: {total_new_reviews} new, {total_skipped_reviews} duplicates"
     logger.info(summary)
+
+    # Mark task as completed in database
+    tracker.update_progress(total_processed, max_reviews, 'success')
+    tracker.result_message = summary
+    tracker.save()
+
     return summary
 
+
+def import_google_play_reviews_for_user(app_id, user_id=None, subscription_tier='free', quick_analysis=True, app_name=None, project_id=None):
+    """
+    Progressive disclosure wrapper with proper TaskTracker integration.
+    """
+    if quick_analysis:
+        # Quick analysis: collect 200 reviews for immediate insights (30-second wait)
+        review_limit = 200
+        task_type = 'quick'
+        logger.info(f"Triggering QUICK analysis for user {user_id} ({subscription_tier}) - app: {app_id}, limit: {review_limit}")
+    else:
+        # Full analysis: collect maximum reviews allowed by subscription
+        max_reviews_for_tier = SUBSCRIPTION_REVIEW_LIMITS.get(subscription_tier, SUBSCRIPTION_REVIEW_LIMITS['free'])
+        review_limit = min(max_reviews_for_tier, HARD_SYSTEM_MAX_REVIEWS)
+        task_type = 'full'
+        logger.info(f"Triggering FULL analysis for user {user_id} ({subscription_tier}) - app: {app_id}, limit: {review_limit}")
+
+    # Create TaskTracker record before starting task
+    if user_id:
+        try:
+            user = User.objects.get(id=user_id)
+            project = Project.objects.get(id=project_id) if project_id else None
+
+            # Create task first to get the task ID
+            task_result = collect_reviews_task.delay(app_id, review_limit, user_id, subscription_tier, app_name, task_type)
+
+            # Create TaskTracker with the actual task ID
+            TaskTracker.objects.create(
+                task_id=task_result.id,
+                task_type=task_type,
+                app_id=app_id,
+                app_name=app_name or app_id,
+                user=user,
+                project=project,
+                target_reviews=review_limit,
+                status='pending'
+            )
+
+            return task_result
+        except Exception as e:
+            logger.error(f"Failed to create TaskTracker: {e}")
+            # Fall back to task without tracking
+            return collect_reviews_task.delay(app_id, review_limit, user_id, subscription_tier, app_name, task_type)
+    else:
+        return collect_reviews_task.delay(app_id, review_limit, user_id, subscription_tier, app_name, task_type)
+
+
+def import_google_play_reviews_full_analysis(app_id, user_id=None, subscription_tier='free'):
+    """
+    Convenience function for full analysis (remaining reviews after quick analysis).
+    """
+    return import_google_play_reviews_for_user(app_id, user_id, subscription_tier, quick_analysis=False)
+
 # --- Apple App Store Configuration ---
-APPLE_APP_ID = '389801252'  # Instagram - a good test case
 APPLE_APP_COUNTRY = 'us'
 
 
@@ -106,14 +262,14 @@ APPLE_APP_COUNTRY = 'us'
     retry_backoff=True,
     retry_backoff_max=300
 )
-def import_apple_app_store_reviews():
+def import_apple_app_store_reviews(app_id):
     """
     A Celery task to fetch the latest reviews from the Apple App Store RSS feed
     and save them to the database, avoiding duplicates.
     """
-    logger.info(f"Starting Apple App Store reviews import for app_id: {APPLE_APP_ID}")
+    logger.info(f"Starting Apple App Store reviews import for app_id: {app_id}")
 
-    url = f"https://itunes.apple.com/{APPLE_APP_COUNTRY}/rss/customerreviews/page=1/id={APPLE_APP_ID}/sortBy=mostRecent/xml"
+    url = f"https://itunes.apple.com/{APPLE_APP_COUNTRY}/rss/customerreviews/page=1/id={app_id}/sortBy=mostRecent/xml"
 
     try:
         response = requests.get(url)
@@ -222,3 +378,42 @@ def extract_pain_points():
                     break  # Only count once per review per category
 
     return pain_point_counts.most_common(3)
+
+
+@shared_task
+def run_weekly_updates():
+    """
+    This is the master scheduler task. It finds all projects and triggers
+    a background refresh for their 'Home Base' apps.
+    """
+    logger.info("--- Starting Weekly Scheduled Updates ---")
+
+    # Get all projects from the database
+    all_projects = Project.objects.all()
+
+    apps_to_update_count = 0
+    for project in all_projects:
+        # We need to know if the 'home_base_app' is Apple or Google.
+        # This is a simple check. Google App IDs contain a '.'
+        if '.' in project.home_app_id:
+            # It's a Google Play app
+            logger.info(f"Triggering Google Play update for project: {project.name}")
+            # We use the existing wrapper function to start the task
+            import_google_play_reviews_for_user(
+                app_id=project.home_app_id,
+                user_id=project.user.id,
+                subscription_tier='pro',  # Or get this from the user's profile
+                quick_analysis=False,  # We want a full, deep analysis for scheduled updates
+                app_name=project.home_app_name,
+                project_id=project.id
+            )
+            apps_to_update_count += 1
+        else:
+            # It's an Apple App Store app
+            logger.info(f"Triggering Apple App Store update for project: {project.name}")
+            import_apple_app_store_reviews.delay(app_id=project.home_app_id)
+            apps_to_update_count += 1
+
+    summary = f"Weekly schedule complete. Triggered updates for {apps_to_update_count} 'Home Base' apps."
+    logger.info(summary)
+    return summary

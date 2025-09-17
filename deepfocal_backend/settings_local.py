@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework.authtoken',
     'corsheaders',
     'django_celery_results',
     'reviews',
@@ -66,19 +67,20 @@ MIDDLEWARE = [
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
+    "http://localhost:5174",
     "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
 ]
 
+CORS_ALLOW_CREDENTIALS = True
+
 CELERY_BEAT_SCHEDULE = {
-    'import-google-play-reviews-weekly': {
-        'task': 'reviews.tasks.import_google_play_reviews',
-        'schedule': crontab(hour=2, minute=0, day_of_week=0),
-    },
-    'import-apple-app-store-reviews-weekly': {
-        'task': 'reviews.tasks.import_apple_app_store_reviews',
-        'schedule': crontab(hour=2, minute=30, day_of_week=0),
+    'run-weekly-updates-sunday-2am': {
+        'task': 'reviews.tasks.run_weekly_updates', # <-- Points to our new master task
+        'schedule': crontab(hour=2, minute=0, day_of_week=0), # Runs every Sunday at 2 AM
     },
 }
+
 
 CELERY_TASK_ALWAYS_EAGER = False
 CELERY_WORKER_POOL = 'solo'
@@ -89,4 +91,10 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
 }
