@@ -107,11 +107,16 @@ class TopicModelingEngine:
         else:
             filtered_reviews = list(reviews)
 
-        if len(filtered_reviews) < 10:
+        raw_review_count = len(filtered_reviews)
+
+        if raw_review_count < 10:
             return {
-                'error': f'Insufficient reviews for analysis. Found {len(filtered_reviews)} reviews.',
+                'error': f'Insufficient reviews for analysis. Found {raw_review_count} reviews.',
                 'topics': [],
-                'review_count': len(filtered_reviews)
+                'review_count': raw_review_count,
+                'raw_review_count': raw_review_count,
+                'usable_review_count': 0,
+                'filtered_out_reviews': raw_review_count
             }
 
         # Preprocess review texts
@@ -124,11 +129,16 @@ class TopicModelingEngine:
         # Remove empty texts
         review_texts = [text for text in review_texts if text.strip()]
 
-        if len(review_texts) < 10:
+        usable_review_count = len(review_texts)
+
+        if usable_review_count < 10:
             return {
-                'error': f'Insufficient valid review text. Found {len(review_texts)} usable reviews.',
+                'error': f'Insufficient valid review text. Found {usable_review_count} usable reviews.',
                 'topics': [],
-                'review_count': len(review_texts)
+                'review_count': usable_review_count,
+                'raw_review_count': raw_review_count,
+                'usable_review_count': usable_review_count,
+                'filtered_out_reviews': raw_review_count - usable_review_count
             }
 
         try:
@@ -156,7 +166,10 @@ class TopicModelingEngine:
             return {
                 'topics': topics,
                 'topic_examples': topic_examples,
-                'review_count': len(review_texts),
+                'review_count': usable_review_count,
+                'raw_review_count': raw_review_count,
+                'usable_review_count': usable_review_count,
+                'filtered_out_reviews': raw_review_count - usable_review_count,
                 'sentiment_filter': sentiment_filter,
                 'model_perplexity': self.lda_model.perplexity(tfidf_matrix)
             }
@@ -165,7 +178,10 @@ class TopicModelingEngine:
             return {
                 'error': f'Topic modeling failed: {str(e)}',
                 'topics': [],
-                'review_count': len(review_texts)
+                'review_count': usable_review_count,
+                'raw_review_count': raw_review_count,
+                'usable_review_count': usable_review_count,
+                'filtered_out_reviews': raw_review_count - usable_review_count
             }
 
     def _extract_topic_info(self, feature_names):

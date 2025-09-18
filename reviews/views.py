@@ -44,9 +44,15 @@ def enhanced_insights_summary(request):
             })
 
     # Return enhanced insights with LDA topics
+    review_count = lda_results.get('review_count', 0)
+    raw_review_count = lda_results.get('raw_review_count', review_count)
+    filtered_out = lda_results.get('filtered_out_reviews', max(raw_review_count - review_count, 0))
+
     return Response({
         'lda_pain_points': pain_points,
-        'review_count_analyzed': lda_results.get('review_count', 0),
+        'review_count_analyzed': review_count,
+        'raw_review_count': raw_review_count,
+        'filtered_out_reviews': filtered_out,
         'app_id': app_id
     })
 

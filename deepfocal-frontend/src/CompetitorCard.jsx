@@ -197,6 +197,16 @@ function CompetitorCard({ selectedProject, updateTrigger }) {
           {Object.entries(data.competitor_analysis).map(([appId, appData]) => {
             const progressiveState = getProgressiveState(appData.total_reviews, activeTasks, appId);
             const activeTask = activeTasks.find(task => task.app_id === appId);
+            const tierReviewLimit = appData.review_limit ?? data.review_limit ?? null;
+            const hasReachedLimit = tierReviewLimit !== null && appData.total_reviews >= tierReviewLimit;
+            const tierLabel = data.subscription_tier
+              ? data.subscription_tier.toUpperCase()
+              : 'CURRENT';
+            const buttonLabel = hasReachedLimit
+              ? 'Review Limit Reached'
+              : progressiveState === 'initial_ready'
+                ? 'Start Analysis'
+                : 'Continue Analysis';
 
             return (
               <Box
@@ -236,8 +246,9 @@ function CompetitorCard({ selectedProject, updateTrigger }) {
                       color="primary"
                       startIcon={<Psychology />}
                       onClick={() => startAnalysis(appId, appData.app_name, 'full')}
+                      disabled={hasReachedLimit}
                     >
-                      {progressiveState === 'initial_ready' ? 'Start Analysis' : 'Continue Analysis'}
+                      {buttonLabel}
                     </Button>
                   )}
 
@@ -254,6 +265,13 @@ function CompetitorCard({ selectedProject, updateTrigger }) {
                   <Chip label={`${appData.negative_percentage}% Negative`} color="error" variant="outlined" />
                   <Chip label={`${appData.neutral_percentage}% Neutral`} variant="outlined" />
                   <Chip label={`${appData.total_reviews} Reviews`} variant="outlined" />
+                  {tierReviewLimit !== null && (
+                    <Chip
+                      label={`${Math.min(appData.total_reviews, tierReviewLimit)}/${tierReviewLimit} Tier Limit`}
+                      color={hasReachedLimit ? 'warning' : 'default'}
+                      variant={hasReachedLimit ? 'filled' : 'outlined'}
+                    />
+                  )}
                 </Box>
 
                 {/* Progress Display for Active Tasks */}
@@ -297,7 +315,7 @@ function CompetitorCard({ selectedProject, updateTrigger }) {
                 )}
 
                 {/* Success Messages */}
-                {progressiveState === 'quick_complete' && !activeTask && (
+                {progressiveState === 'quick_complete' && !activeTask && !hasReachedLimit && (
                   <Box sx={{ mt: 2, p: 1.5, bgcolor: 'rgba(76, 175, 80, 0.08)', borderRadius: 1 }}>
                     <Typography variant="body2" color="success.main" sx={{ fontWeight: 'medium' }}>
                       🎉 Quick analysis complete! Got insights in ~30 seconds. Click "Continue Analysis" for deeper insights.
@@ -309,6 +327,14 @@ function CompetitorCard({ selectedProject, updateTrigger }) {
                   <Box sx={{ mt: 2, p: 1.5, bgcolor: 'rgba(76, 175, 80, 0.08)', borderRadius: 1 }}>
                     <Typography variant="body2" color="success.main" sx={{ fontWeight: 'medium' }}>
                       ✅ Full analysis complete! Comprehensive insights available with {appData.total_reviews} reviews.
+                    </Typography>
+                  </Box>
+                )}
+
+                {hasReachedLimit && !activeTask && (
+                  <Box sx={{ mt: 2, p: 1.5, bgcolor: 'rgba(255, 193, 7, 0.12)', borderRadius: 1 }}>
+                    <Typography variant="body2" color="warning.main" sx={{ fontWeight: 'medium' }}>
+                      Review limit reached for your {tierLabel === 'CURRENT' ? 'current plan' : `${tierLabel} plan`}. Upgrade to analyze more reviews.
                     </Typography>
                   </Box>
                 )}
