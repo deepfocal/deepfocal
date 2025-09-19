@@ -35,18 +35,32 @@ def enhanced_insights_summary(request):
     lda_results = analyze_app_topics(app_id, sentiment_filter='negative')
     pain_points = []
 
-    if 'topics' in lda_results:
-        for topic in lda_results['topics'][:3]:  # Top 3 topics
+    topic_examples = lda_results.get('topic_examples', {})
+
+    topics_for_display = lda_results.get('distinct_topics') or lda_results.get('topics', [])
+
+    if topics_for_display:
+        for topic in topics_for_display[:3]:  # Top 3 distinct topics
+            examples = topic_examples.get(topic['topic_id'], [])
+            quotes = [example.get('quote', '').strip() for example in examples if example.get('quote')]
+
             pain_points.append({
                 'issue': topic['label'],
                 'keywords': topic['top_words'][:5],
-                'coherence_score': topic['coherence_score']
+                'coherence_score': topic['coherence_score'],
+                'quotes': quotes
             })
 
     # Return enhanced insights with LDA topics
+    review_count = lda_results.get('review_count', 0)
+    raw_review_count = lda_results.get('raw_review_count', review_count)
+    filtered_out = lda_results.get('filtered_out_reviews', max(raw_review_count - review_count, 0))
+
     return Response({
         'lda_pain_points': pain_points,
-        'review_count_analyzed': lda_results.get('review_count', 0),
+        'review_count_analyzed': review_count,
+        'raw_review_count': raw_review_count,
+        'filtered_out_reviews': filtered_out,
         'app_id': app_id
     })
 

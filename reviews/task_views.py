@@ -22,6 +22,10 @@ def project_analysis_status(request, project_id):
             'error': 'Project not found'
         }, status=status.HTTP_404_NOT_FOUND)
 
+    # Get user profile for limits and all app IDs for this project
+    profile = UserProfile.objects.get_or_create(user=request.user)[0]
+    review_limit = profile.get_review_collection_limit()
+
     # Get all app IDs for this project
     app_ids = [project.home_app_id]
     competitors = CompetitorApp.objects.filter(project=project)
@@ -65,6 +69,9 @@ def project_analysis_status(request, project_id):
             'positive_percentage': round((positive / total * 100), 1) if total > 0 else 0,
             'negative_percentage': round((negative / total * 100), 1) if total > 0 else 0,
             'neutral_percentage': round((neutral / total * 100), 1) if total > 0 else 0,
+            'review_limit': review_limit,
+            'remaining_reviews': max(review_limit - total, 0),
+            'can_collect_more': total < review_limit,
         }
 
         # Check for active tasks for this app
@@ -92,7 +99,9 @@ def project_analysis_status(request, project_id):
         'competitor_analysis': apps_data,
         'active_tasks': task_data,
         'has_active_tasks': len(task_data) > 0,
-        'message': f"Found {len(task_data)} active tasks" if task_data else "No active tasks"
+        'message': f"Found {len(task_data)} active tasks" if task_data else "No active tasks",
+        'review_limit': review_limit,
+        'subscription_tier': profile.subscription_tier,
     })
 
 
