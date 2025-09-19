@@ -186,17 +186,36 @@ function PainPointsCard({ selectedProject, updateTrigger }) {
                             <Typography variant="subtitle2" gutterBottom>
                               #{painIndex + 1} {painPoint.issue}
                             </Typography>
-                            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                              <Chip
-                                label={`Keywords: ${painPoint.keywords.join(', ')}`}
-                                color="warning"
-                                variant="outlined"
-                              />
+                            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
                               <Chip
                                 label={`Coherence: ${painPoint.coherence_score.toFixed(1)}`}
                                 variant="outlined"
                               />
+                              {painPoint.keywords?.length > 0 && (
+                                <Chip
+                                  label={`Key terms: ${painPoint.keywords.slice(0, 3).join(', ')}`}
+                                  color="warning"
+                                  variant="outlined"
+                                />
+                              )}
                             </Box>
+                            {painPoint.quotes && painPoint.quotes.length > 0 ? (
+                              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                {painPoint.quotes.slice(0, 2).map((quote, quoteIdx) => (
+                                  <Typography
+                                    key={`${app.app_id}-${painIndex}-quote-${quoteIdx}`}
+                                    variant="body2"
+                                    sx={{ fontStyle: 'italic' }}
+                                  >
+                                    “{quote}”
+                                  </Typography>
+                                ))}
+                              </Box>
+                            ) : (
+                              <Typography variant="body2" color="text.secondary">
+                                No representative quotes available.
+                              </Typography>
+                            )}
                           </Box>
                         ))
                       ) : (
