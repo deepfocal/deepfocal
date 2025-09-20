@@ -1,5 +1,6 @@
 ﻿import React from 'react';
 import { AuthProvider, useAuth } from './AuthContext';
+import { TaskProvider } from './contexts/TaskContext'; // Add this import
 import LoginForm from './LoginForm';
 import PremiumDashboard from './dashboard/PremiumDashboard';
 import ClassicDashboard from './legacy/ClassicDashboard';
@@ -25,7 +26,12 @@ function AppContent() {
 
   const enablePremium = Boolean(user?.enable_premium_dashboard);
 
-  return enablePremium ? <PremiumDashboard /> : <ClassicDashboard />;
+  // Wrap the dashboards with TaskProvider
+  return (
+    <TaskProvider>
+      {enablePremium ? <PremiumDashboard /> : <ClassicDashboard />}
+    </TaskProvider>
+  );
 }
 
 function App() {

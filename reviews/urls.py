@@ -24,10 +24,9 @@ urlpatterns = [
     path('enhanced-insights/', enhanced_insights_summary, name='enhanced-insights'),
     path('competitor-analysis/', competitor_analysis, name='competitor-analysis'),
     path('strengths/', strengths_insights, name='strengths-insights'),
-    path('api/strategic-performance/', strategic_performance, name='strategic-performance'),
-    path('api/trigger-insights/', trigger_insights_generation, name='trigger-insights'),
-    path('api/task-status/<str:task_id>/', views_task_status, name='api-task-status'),
-
+    path('strategic-performance/', strategic_performance, name='strategic-performance'),
+    path('trigger-insights/', trigger_insights_generation, name='trigger-insights'),
+    path('task-status/<str:task_id>/', views_task_status, name='api-task-status'),
 
     # Authentication endpoints
     path('auth/register/', register, name='register'),

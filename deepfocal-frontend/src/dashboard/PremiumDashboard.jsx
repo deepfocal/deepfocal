@@ -1,4 +1,6 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import { useTask } from '../contexts/TaskContext';
+import LoadingOverlay from '../components/LoadingOverlay';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   LayoutDashboard,
   BarChart3,
@@ -79,6 +81,7 @@ function PremiumDashboard() {
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [panelMessage, setPanelMessage] = useState('');
+  const { startTask, isTaskRunning, runningTasks } = useTask();
 
   const selectedProject = useMemo(
     () => projectsState.projects.find((project) => project.id === selectedProjectId) || null,
@@ -347,21 +350,40 @@ function PremiumDashboard() {
   };
 
   const handleStartAnalysis = async (appId, analysisType = 'quick') => {
-    if (!selectedProjectId || !appId) {
-      return;
-    }
-    try {
-      await apiClient.post('/api/analysis/start/', {
-        project_id: selectedProjectId,
-        app_id: appId,
-        analysis_type: analysisType,
-      });
-      await loadProjectAnalytics(selectedProjectId, selectedAppMeta);
-    } catch (error) {
-      console.error('Failed to start analysis', error);
-      setPanelMessage(error.response?.data?.error || 'Unable to start analysis');
-    }
-  };
+  if (!selectedProjectId || !appId) {
+    return;
+  }
+
+  // Check if task is already running for this app
+  if (isTaskRunning(appId)) {
+    setPanelMessage('Analysis already in progress for this app');
+    return;
+  }
+
+  try {
+    // Start the background task using our task management system
+    await startTask(appId, selectedProjectId);
+    setPanelMessage('Analysis started in background. You can continue using the dashboard.');
+
+    // Set up listener for task completion
+    const handleTaskComplete = (event) => {
+      if (event.detail.appId === appId) {
+        // Refresh data when task completes
+        loadProjectAnalytics(selectedProjectId, selectedAppMeta);
+        setPanelMessage('Analysis complete! Data has been refreshed.');
+
+        // Clean up listener
+        window.removeEventListener('taskCompleted', handleTaskComplete);
+      }
+    };
+
+    window.addEventListener('taskCompleted', handleTaskComplete);
+
+  } catch (error) {
+    console.error('Failed to start analysis', error);
+    setPanelMessage(error.response?.data?.error || 'Unable to start analysis');
+  }
+};
 
   return (
     <div className="flex h-screen bg-gray-background text-gray-base">
@@ -467,6 +489,18 @@ function PremiumDashboard() {
           )}
         </div>
       </main>
+
+      {/* Add loading overlays for running tasks */}
+      {selectedAppMeta?.appId && isTaskRunning(selectedAppMeta.appId) && (
+        <LoadingOverlay appId={selectedAppMeta.appId} />
+      )}
+
+      {/* Show overlay for any other running tasks in this project */}
+      {Array.from(runningTasks.values())
+        .filter(task => task.projectId === selectedProjectId && task.appId !== selectedAppMeta?.appId)
+        .map(task => (
+          <LoadingOverlay key={task.appId} appId={task.appId} />
+        ))}
     </div>
   );
 }
