@@ -1,22 +1,31 @@
-import React from 'react';
-import { CircularProgress, Box } from '@mui/material';
+﻿import React from 'react';
 import { AuthProvider, useAuth } from './AuthContext';
 import LoginForm from './LoginForm';
-import Dashboard from './Dashboard';
-import './App.css';
+import PremiumDashboard from './dashboard/PremiumDashboard';
+import ClassicDashboard from './legacy/ClassicDashboard';
+
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gray-background">
+      <div className="h-12 w-12 animate-spin rounded-full border-4 border-primary/20 border-t-primary" />
+    </div>
+  );
+}
 
 function AppContent() {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, user } = useAuth();
 
   if (loading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
-        <CircularProgress />
-      </Box>
-    );
+    return <LoadingScreen />;
   }
 
-  return isAuthenticated ? <Dashboard /> : <LoginForm />;
+  if (!isAuthenticated) {
+    return <LoginForm />;
+  }
+
+  const enablePremium = Boolean(user?.enable_premium_dashboard);
+
+  return enablePremium ? <PremiumDashboard /> : <ClassicDashboard />;
 }
 
 function App() {

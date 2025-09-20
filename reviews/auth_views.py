@@ -1,10 +1,11 @@
-from rest_framework import status
+﻿from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.conf import settings
 from .models import UserProfile
 
 
@@ -104,7 +105,8 @@ def user_profile(request):
         'review_collection_limit': profile.get_review_collection_limit(),
         'system_max_reviews': 2000,  # Hard system maximum
         'unlimited_dashboard_access': True,  # No monthly limits
-        'data_refresh_policy': 'on-demand (when data is >24h old)'
+        'data_refresh_policy': 'on-demand (when data is >24h old)',
+        'enable_premium_dashboard': bool(getattr(settings, 'ENABLE_PREMIUM_DASHBOARD', False)),
     })
 
 

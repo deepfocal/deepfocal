@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import axios from 'axios';
+﻿import React, { createContext, useContext, useState, useEffect } from 'react';
+import apiClient, { setAuthToken } from './apiClient';
 
 const AuthContext = createContext();
 
@@ -18,7 +18,7 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (token) {
-      axios.defaults.headers.common['Authorization'] = `Token ${token}`;
+      setAuthToken(token);
       fetchUserProfile();
     } else {
       setLoading(false);
@@ -27,7 +27,7 @@ export const AuthProvider = ({ children }) => {
 
   const fetchUserProfile = async () => {
     try {
-      const response = await axios.get('http://localhost:8000/api/auth/profile/');
+      const response = await apiClient.get('/api/auth/profile/');
       setUser(response.data);
     } catch (error) {
       console.error('Error fetching user profile:', error);
@@ -39,45 +39,45 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (username, password) => {
     try {
-      const response = await axios.post('http://localhost:8000/api/auth/login/', {
+      const response = await apiClient.post('/api/auth/login/', {
         username,
-        password
+        password,
       });
 
       const { token: newToken, ...userData } = response.data;
       setToken(newToken);
       setUser(userData);
       localStorage.setItem('token', newToken);
-      axios.defaults.headers.common['Authorization'] = `Token ${newToken}`;
+      setAuthToken(newToken);
 
       return { success: true };
     } catch (error) {
       return {
         success: false,
-        error: error.response?.data?.error || 'Login failed'
+        error: error.response?.data?.error || 'Login failed',
       };
     }
   };
 
   const register = async (username, email, password) => {
     try {
-      const response = await axios.post('http://localhost:8000/api/auth/register/', {
+      const response = await apiClient.post('/api/auth/register/', {
         username,
         email,
-        password
+        password,
       });
 
       const { token: newToken, ...userData } = response.data;
       setToken(newToken);
       setUser(userData);
       localStorage.setItem('token', newToken);
-      axios.defaults.headers.common['Authorization'] = `Token ${newToken}`;
+      setAuthToken(newToken);
 
       return { success: true };
     } catch (error) {
       return {
         success: false,
-        error: error.response?.data?.error || 'Registration failed'
+        error: error.response?.data?.error || 'Registration failed',
       };
     }
   };
@@ -86,7 +86,7 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
     setToken(null);
     localStorage.removeItem('token');
-    delete axios.defaults.headers.common['Authorization'];
+    setAuthToken(null);
   };
 
   const value = {
@@ -96,12 +96,8 @@ export const AuthProvider = ({ children }) => {
     login,
     register,
     logout,
-    isAuthenticated: !!token && !!user
+    isAuthenticated: Boolean(token && user),
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

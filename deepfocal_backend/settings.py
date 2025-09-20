@@ -1,10 +1,12 @@
-# In settings.py
+﻿# In settings.py
 
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-p*)p5a(*16u)h#2cj&jgcy8042&lidc)i9eeklh6ov#-&lluzt'
 DEBUG = True # This is okay for now, but in production this should be False
+DEFAULT_CHARSET = 'utf-8'
+FILE_CHARSET = 'utf-8'
 ALLOWED_HOSTS = []
 
 # Application definition
@@ -59,6 +61,9 @@ DATABASES = {
         'PASSWORD': 'YOUR_POSTGRES_PASSWORD_HERE', # We will set this in the local file
         'HOST': 'localhost',
         'PORT': '5432',
+'OPTIONS': {
+            'charset': 'utf8mb4',
+        },
     }
 }
 
@@ -94,3 +99,13 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_CREDENTIALS = True
+REST_FRAMEWORK = {
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
+    'UNICODE_JSON': True,
+    'CHARSET': 'utf-8',
+}
+
+# Premium dashboard feature flag
+ENABLE_PREMIUM_DASHBOARD = True
