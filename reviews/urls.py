@@ -1,6 +1,7 @@
 ﻿# file: reviews/urls.py
 from django.urls import path
-from .views import ReviewListView, enhanced_insights_summary, competitor_analysis
+from .views import ReviewListView, enhanced_insights_summary, competitor_analysis, strategic_performance, trigger_insights_generation
+from .views import task_status as views_task_status
 from .auth_views import register, login, user_profile, logout
 from .project_views import (
     create_project,
@@ -23,6 +24,10 @@ urlpatterns = [
     path('enhanced-insights/', enhanced_insights_summary, name='enhanced-insights'),
     path('competitor-analysis/', competitor_analysis, name='competitor-analysis'),
     path('strengths/', strengths_insights, name='strengths-insights'),
+    path('api/strategic-performance/', strategic_performance, name='strategic-performance'),
+    path('api/trigger-insights/', trigger_insights_generation, name='trigger-insights'),
+    path('api/task-status/<str:task_id>/', views_task_status, name='api-task-status'),
+
 
     # Authentication endpoints
     path('auth/register/', register, name='register'),
