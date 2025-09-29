@@ -414,6 +414,65 @@ def run_weekly_updates():
             import_apple_app_store_reviews.delay(app_id=project.home_app_id)
             apps_to_update_count += 1
 
-    summary = f"Weekly schedule complete. Triggered updates for {apps_to_update_count} 'Home Base' apps."
-    logger.info(summary)
-    return summary
+        # Create daily sentiment snapshots for historical trending
+        snapshot_count = 0
+        for project in all_projects:
+            create_sentiment_snapshot.delay(project.home_app_id)
+            logger.info(f"Triggered sentiment snapshot for {project.home_app_name}")
+            snapshot_count += 1
+
+        summary = f"Weekly schedule complete. Triggered updates for {apps_to_update_count} 'Home Base' apps. Created {snapshot_count} sentiment snapshots for historical tracking."
+        logger.info(summary)
+
+        return summary
+
+
+# All your existing functions...
+
+
+
+
+@shared_task
+def create_sentiment_snapshot(app_id):
+    """
+    Calculate current sentiment for an app and store as daily snapshot
+    """
+    from django.utils import timezone
+    from .models import Review, SentimentSnapshot
+    from datetime import date
+
+    today = date.today()
+
+    # Get all reviews for this app with sentiment scores
+    reviews = Review.objects.filter(
+        app_id=app_id,
+        sentiment_score__isnull=False
+    )
+
+    if not reviews.exists():
+        return f"No reviews found for {app_id}"
+
+    total_count = reviews.count()
+    positive_count = reviews.filter(sentiment_score__gt=0.1).count()
+    negative_count = reviews.filter(sentiment_score__lt=-0.1).count()
+    neutral_count = total_count - positive_count - negative_count
+
+    # Calculate percentages
+    positive_pct = (positive_count / total_count) * 100
+    negative_pct = (negative_count / total_count) * 100
+    neutral_pct = (neutral_count / total_count) * 100
+
+    # Create or update today's snapshot
+    snapshot, created = SentimentSnapshot.objects.update_or_create(
+        app_id=app_id,
+        date=today,
+        defaults={
+            'positive_percentage': positive_pct,
+            'negative_percentage': negative_pct,
+            'neutral_percentage': neutral_pct,
+            'total_reviews_analyzed': total_count,
+        }
+    )
+
+    action = "Created" if created else "Updated"
+    return f"{action} snapshot for {app_id}: {positive_pct:.1f}% positive, {negative_pct:.1f}% negative"

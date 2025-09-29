@@ -1,4 +1,4 @@
-﻿import { useTask } from '../contexts/TaskContext';
+import { useTask } from '../contexts/TaskContext';
 import LoadingOverlay from '../components/LoadingOverlay';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -11,10 +11,12 @@ import {
   Bell,
   ChevronDown,
   TrendingUp,
+  TrendingDown,
   Calendar,
-
   Plus,
   RefreshCw,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import {
   LineChart,
@@ -30,6 +32,27 @@ import apiClient from '../apiClient';
 import { useAuth } from '../AuthContext';
 
 const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, value));
+
+const toneBadgeClasses = {
+  primary: 'bg-primary/10 text-primary',
+  warning: 'bg-warning/10 text-warning',
+  danger: 'bg-danger/10 text-danger',
+};
+
+const toneValueClasses = {
+  primary: 'text-primary',
+  warning: 'text-warning',
+  danger: 'text-danger',
+};
+
+const SIDEBAR_PREF_KEY = 'premium-dashboard.sidebarCollapsed';
+
+const getStoredSidebarPref = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  return window.localStorage.getItem(SIDEBAR_PREF_KEY) === 'true';
+};
 
 const navigationItems = [
   {
@@ -72,6 +95,13 @@ function PremiumDashboard() {
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [selectedAppKey, setSelectedAppKey] = useState('home');
   const [dateRange, setDateRange] = useState('30d');
+
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    return getStoredSidebarPref();
+  });
 
   const [statusData, setStatusData] = useState(null);
   const [sentimentSeries, setSentimentSeries] = useState([]);
@@ -140,6 +170,20 @@ function PremiumDashboard() {
     };
   }, [selectedAppKey, selectedProject, statusData]);
 
+  const competitorsList = useMemo(() => {
+    const apps = statusData?.competitor_analysis || {};
+    return Object.entries(apps)
+      .filter(([, item]) => item.app_type === 'competitor')
+      .map(([appId, item]) => ({
+        appId,
+        competitorId: item.competitor_id ?? null,
+        name: item.app_name,
+        addedAt: item.added_at ?? null,
+        status: item.status ?? item.review_import?.status ?? null,
+      }))
+      .sort((a, b) => ((b.addedAt || '') ?? '').localeCompare((a.addedAt || '') ?? ''));
+  }, [statusData]);
+
   const strategicSnapshot = useMemo(() => {
     if (!statusData || !selectedProject || !selectedAppMeta?.appId) {
       return null;
@@ -179,6 +223,9 @@ function PremiumDashboard() {
     const rank = rankIndex >= 0 ? rankIndex + 1 : rankingOrder.length;
     const homeRank = homeRankIndex >= 0 ? homeRankIndex + 1 : rankingOrder.length;
 
+    const sentimentDifference = targetPositive - competitorAveragePositive;
+    const sentimentBenchmark = sentimentDifference >= 5 ? "Above Average" : sentimentDifference <= -5 ? "Below Average" : "Average";
+
     return {
       churnRisk,
       competitiveGap,
@@ -191,8 +238,36 @@ function PremiumDashboard() {
       },
       contextLabel: targetId === homeId ? 'Your App' : selectedAppMeta.displayName || 'Competitor',
       referenceLabel: targetId === homeId ? 'Competitor Avg' : homeMetrics.app_name || 'Your App',
+      sentimentBenchmark,
     };
   }, [selectedAppMeta, selectedProject, statusData]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem(SIDEBAR_PREF_KEY, String(isSidebarCollapsed));
+  }, [isSidebarCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const mediaQuery = window.matchMedia('(max-width: 1023.98px)');
+    const syncFromQuery = (query) => {
+      if (query.matches) {
+        setIsSidebarCollapsed(true);
+      } else {
+        setIsSidebarCollapsed(getStoredSidebarPref());
+      }
+    };
+
+    syncFromQuery(mediaQuery);
+    const handler = (event) => syncFromQuery(event);
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, []);
+
   const activeTasks = statusData?.active_tasks || [];
 
   const loadProjects = async () => {
@@ -217,6 +292,7 @@ function PremiumDashboard() {
   useEffect(() => {
     loadProjects();
   }, []);
+
   const loadProjectAnalytics = async (projectId, appMeta) => {
     if (!projectId || !appMeta?.appId) {
       return;
@@ -328,6 +404,7 @@ function PremiumDashboard() {
     if (!selectedProjectId) {
       return;
     }
+
     const form = event.target;
     const payload = {
       project_id: selectedProjectId,
@@ -339,65 +416,232 @@ function PremiumDashboard() {
       return;
     }
 
+    const homeAppId =
+      selectedProject?.home_app_id ||
+      projectsState.projects.find((project) => project.id === selectedProjectId)?.home_app_id ||
+      null;
+
     try {
-      await apiClient.post('/api/projects/add-competitor/', payload);
+      const response = await apiClient.post('/api/projects/add-competitor/', payload);
+      const competitorRecord = response?.data || {};
       form.reset();
-      await loadProjectAnalytics(selectedProjectId, selectedAppMeta);
+
+      setStatusData((previous) => {
+        const previousAnalysis = previous?.competitor_analysis || {};
+        if (previousAnalysis[payload.app_id]) {
+          return previous;
+        }
+
+        const reviewImport = competitorRecord.review_import || {};
+
+        return {
+          ...(previous || {}),
+          competitor_analysis: {
+            ...previousAnalysis,
+            [payload.app_id]: {
+              app_id: payload.app_id,
+              app_name: payload.app_name,
+              app_type: 'competitor',
+              competitor_id: competitorRecord.id ?? null,
+              added_at: competitorRecord.added_at ?? null,
+              positive_percentage: 0,
+              negative_percentage: 0,
+              review_count: 0,
+              status: reviewImport.status || previousAnalysis[payload.app_id]?.status || 'pending',
+              review_import: reviewImport,
+            },
+          },
+        };
+      });
+
+      setSelectedAppKey(payload.app_id);
+
+      await Promise.all([
+        loadProjectAnalytics(selectedProjectId, {
+          appId: payload.app_id,
+          label: `vs. ${payload.app_name}`,
+          displayName: payload.app_name,
+          compareTo: homeAppId,
+        }),
+        loadProjects(),
+      ]);
+      setPanelMessage(`${payload.app_name} added as competitor.`);
     } catch (error) {
+      if (error.response?.status === 400) {
+        const message = error.response?.data?.error || '';
+        if (message.toLowerCase().includes('already')) {
+          setPanelMessage(message || 'Competitor already exists in this project. Switching to it.');
+          setSelectedAppKey(payload.app_id);
+          await loadProjectAnalytics(selectedProjectId, {
+            appId: payload.app_id,
+            label: `vs. ${payload.app_name}`,
+            displayName: payload.app_name,
+            compareTo: homeAppId,
+          });
+          return;
+        }
+      }
+
       console.error('Failed to add competitor', error);
       setPanelMessage(error.response?.data?.error || 'Unable to add competitor');
     }
   };
 
-  const handleStartAnalysis = async (appId, analysisType = 'quick') => {
-  if (!selectedProjectId || !appId) {
-    return;
-  }
+  const handleSelectExistingCompetitor = (appId) => {
+    if (!appId) {
+      return;
+    }
+    setSelectedAppKey(appId);
+    setPanelMessage('');
+  };
 
-  // Check if task is already running for this app
-  if (isTaskRunning(appId)) {
-    setPanelMessage('Analysis already in progress for this app');
-    return;
-  }
+  const handleDeleteCompetitor = async (competitorId, appId) => {
+    if (!competitorId) {
+      setPanelMessage('Unable to remove competitor: identifier missing.');
+      return;
+    }
 
-  try {
-    // Start the background task using our task management system
-    await startTask(appId, selectedProjectId);
-    setPanelMessage('Analysis started in background. You can continue using the dashboard.');
+    const confirmationMessage = 'Remove this competitor from the project? This will also stop future comparisons.';
+    if (typeof window !== 'undefined' && !window.confirm(confirmationMessage)) {
+      return;
+    }
 
-    // Set up listener for task completion
-    const handleTaskComplete = (event) => {
-      if (event.detail.appId === appId) {
-        // Refresh data when task completes
-        loadProjectAnalytics(selectedProjectId, selectedAppMeta);
-        setPanelMessage('Analysis complete! Data has been refreshed.');
+    const currentSelectionKey = selectedAppKey;
+    const currentAppMeta = selectedAppMeta;
+    const fallbackHomeMeta = selectedProject
+      ? {
+          appId: selectedProject.home_app_id,
+          label: 'Your App',
+          displayName: selectedProject.home_app_name,
+          compareTo: null,
+        }
+      : null;
 
-        // Clean up listener
-        window.removeEventListener('taskCompleted', handleTaskComplete);
+    try {
+      await apiClient.delete(`/api/competitors/${competitorId}/delete/`);
+
+      setStatusData((previous) => {
+        if (!previous?.competitor_analysis) {
+          return previous;
+        }
+        const nextAnalysis = { ...previous.competitor_analysis };
+        delete nextAnalysis[appId];
+        return { ...previous, competitor_analysis: nextAnalysis };
+      });
+
+      if (currentSelectionKey === appId) {
+        setSelectedAppKey('home');
       }
-    };
 
-    window.addEventListener('taskCompleted', handleTaskComplete);
+      setPanelMessage('Competitor removed.');
 
-  } catch (error) {
-    console.error('Failed to start analysis', error);
-    setPanelMessage(error.response?.data?.error || 'Unable to start analysis');
-  }
-};
+      const nextAppMeta = currentSelectionKey === appId ? fallbackHomeMeta : currentAppMeta;
+
+      await Promise.all([
+        loadProjects(),
+        nextAppMeta?.appId ? loadProjectAnalytics(selectedProjectId, nextAppMeta) : Promise.resolve(),
+      ]);
+    } catch (error) {
+      console.error('Failed to delete competitor', error);
+      setPanelMessage(error.response?.data?.error || 'Unable to remove competitor');
+    }
+  };
+
+  const handleStartAnalysis = async (appId, analysisType = 'quick') => {
+    if (!selectedProjectId || !appId) {
+      return;
+    }
+
+    if (isTaskRunning(appId)) {
+      setPanelMessage('Analysis already in progress for this app');
+      return;
+    }
+
+    const analysisLabel = analysisType === 'full' ? 'Full analysis' : 'Quick analysis';
+
+    try {
+      await startTask(appId, selectedProjectId, analysisType);
+      setPanelMessage(`${analysisLabel} started in background. You can continue using the dashboard.`);
+
+      const handleTaskComplete = (event) => {
+        if (event.detail.appId !== appId) {
+          return;
+        }
+        const completedLabel = event.detail.analysisType === 'full' ? 'Full analysis' : 'Quick analysis';
+        loadProjectAnalytics(selectedProjectId, selectedAppMeta);
+        setPanelMessage(`${completedLabel} complete! Data has been refreshed.`);
+        cleanupListeners();
+      };
+
+      const handleTaskFailed = (event) => {
+        if (event.detail.appId !== appId) {
+          return;
+        }
+        const failedLabel = event.detail.analysisType === 'full' ? 'Full analysis' : 'Quick analysis';
+        setPanelMessage(event.detail.error || `${failedLabel} failed. Please try again.`);
+        cleanupListeners();
+      };
+
+      const handleTaskTimeoutEvent = (event) => {
+        if (event.detail.appId !== appId) {
+          return;
+        }
+        const timedOutLabel = event.detail.analysisType === 'full' ? 'Full analysis' : 'Quick analysis';
+        setPanelMessage(`${timedOutLabel} is taking longer than expected. Please try again soon.`);
+        cleanupListeners();
+      };
+
+      const cleanupListeners = () => {
+        window.removeEventListener('taskCompleted', handleTaskComplete);
+        window.removeEventListener('taskFailed', handleTaskFailed);
+        window.removeEventListener('taskTimeout', handleTaskTimeoutEvent);
+      };
+
+      window.addEventListener('taskCompleted', handleTaskComplete);
+      window.addEventListener('taskFailed', handleTaskFailed);
+      window.addEventListener('taskTimeout', handleTaskTimeoutEvent);
+    } catch (error) {
+      console.error('Failed to start analysis', error);
+      setPanelMessage(error.response?.data?.error || 'Unable to start analysis');
+    }
+  };
+
+  const sidebarWidthClass = isSidebarCollapsed ? 'w-16' : 'w-64';
+  const toggleSidebar = () => setIsSidebarCollapsed((prev) => !prev);
 
   return (
-    <div className="flex h-screen bg-gray-background text-gray-base">
-      <aside className="flex w-64 flex-col bg-gray-base text-white">
-        <div className="border-b border-white/10 p-6">
-          <h1 className="text-xl font-semibold">Deepfocal</h1>
-          <p className="mt-1 text-xs text-white/70">{user?.username || 'Analyst'}</p>
+    <div className="flex min-h-screen bg-gray-background text-gray-base">
+      <aside
+        className={clsx(
+          'flex flex-col bg-gray-base text-white transition-[width] duration-300 ease-in-out',
+          sidebarWidthClass,
+        )}
+      >
+        <div className="flex h-16 items-center gap-3 border-b border-white/10 px-4">
+          <div
+            className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/10 text-lg font-semibold"
+            title="Deepfocal"
+          >
+            DF
+          </div>
+          {!isSidebarCollapsed && (
+            <div className="flex flex-col">
+              <h1 className="text-xl font-semibold leading-tight">Deepfocal</h1>
+              <p className="text-xs text-white/70">{user?.username || 'Analyst'}</p>
+            </div>
+          )}
         </div>
         <nav className="flex-1 overflow-y-auto py-6">
           {navigationItems.map((group) => (
-            <div key={group.group} className="mb-8">
-              <h3 className="px-6 text-xs font-medium uppercase tracking-wider text-white/50">
-                {group.group}
-              </h3>
+            <div
+              key={group.group}
+              className={clsx('mb-6', isSidebarCollapsed ? 'px-2' : 'px-4')}
+            >
+              {!isSidebarCollapsed && (
+                <h3 className="px-2 text-xs font-medium uppercase tracking-wider text-white/50">
+                  {group.group}
+                </h3>
+              )}
               <div className="mt-3 space-y-1">
                 {group.items.map((item) => {
                   const Icon = item.icon;
@@ -406,16 +650,18 @@ function PremiumDashboard() {
                     <button
                       key={item.id}
                       type="button"
+                      title={isSidebarCollapsed ? item.label : undefined}
                       onClick={() => setActiveTab(item.id)}
                       className={clsx(
-                        'flex w-full items-center px-6 py-3 text-sm transition-colors',
+                        'group flex w-full items-center rounded-lg py-2 text-sm font-medium transition-colors duration-200',
                         isActive
-                          ? 'border-r-2 border-primary bg-white/5 font-medium text-white'
+                          ? 'border-r-2 border-primary bg-white/10 text-white'
                           : 'text-white/70 hover:bg-white/10 hover:text-white',
+                        isSidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-3',
                       )}
                     >
-                      <Icon className="mr-3 h-5 w-5" />
-                      {item.label}
+                      <Icon className="h-5 w-5 shrink-0" />
+                      {!isSidebarCollapsed && <span className="whitespace-nowrap">{item.label}</span>}
                     </button>
                   );
                 })}
@@ -425,7 +671,12 @@ function PremiumDashboard() {
         </nav>
       </aside>
 
-      <main className="flex-1 overflow-y-auto">
+      <main
+        className={clsx(
+          'flex-1 overflow-y-auto transition-[padding] duration-300 ease-in-out',
+          isSidebarCollapsed ? 'lg:pl-4' : 'lg:pl-0',
+        )}
+      >
         <GlobalHeader
           projects={projectsState.projects}
           selectedProjectId={selectedProjectId}
@@ -435,9 +686,11 @@ function PremiumDashboard() {
           onSelectApp={setSelectedAppKey}
           dateRange={dateRange}
           onSelectDateRange={setDateRange}
+          isSidebarCollapsed={isSidebarCollapsed}
+          onToggleSidebar={toggleSidebar}
         />
 
-        <div className="mx-auto max-w-7xl px-8 py-8">
+        <div className="mx-auto max-w-7xl px-8 py-6">
           {panelMessage && (
             <div className="mb-6 rounded-lg border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger">
               {panelMessage}
@@ -479,6 +732,9 @@ function PremiumDashboard() {
                   projectsState={projectsState}
                   onCreateProject={handleCreateProject}
                   onAddCompetitor={handleAddCompetitor}
+                  competitors={competitorsList}
+                  onSelectCompetitor={handleSelectExistingCompetitor}
+                  onDeleteCompetitor={handleDeleteCompetitor}
                 />
               )}
 
@@ -513,24 +769,41 @@ function GlobalHeader({
   onSelectApp,
   dateRange,
   onSelectDateRange,
+  isSidebarCollapsed,
+  onToggleSidebar,
 }) {
+  const SidebarToggleIcon = isSidebarCollapsed ? ChevronRight : ChevronLeft;
+
   return (
     <div className="border-b border-gray-200 bg-white px-8 py-4">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-4">
-          <div>
-            <label className="text-xs font-medium text-gray-500">Project</label>
-            <select
-              value={selectedProjectId || ''}
-              onChange={(event) => onSelectProject(Number(event.target.value))}
-              className="mt-1 w-56 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-base focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onToggleSidebar}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-500 transition hover:border-primary/40 hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              aria-label={isSidebarCollapsed ? 'Expand sidebar navigation' : 'Collapse sidebar navigation'}
             >
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
+              <SidebarToggleIcon className="h-4 w-4" />
+            </button>
+            <div>
+              <label className="text-xs font-medium text-gray-500">Project</label>
+              <div className="relative mt-1">
+                <select
+                  value={selectedProjectId || ''}
+                  onChange={(event) => onSelectProject(Number(event.target.value))}
+                  className="w-56 appearance-none rounded-lg border border-gray-300 px-4 py-2 pr-10 text-sm font-medium text-gray-base focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+                >
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-gray-400" />
+              </div>
+            </div>
           </div>
 
           <div>
@@ -616,6 +889,13 @@ function DashboardTab({ strategicSnapshot,
   const rankingDirection = categoryRanking.trend?.direction === 'down' ? 'down' : 'up';
   const RankingIcon = rankingDirection === 'down' ? TrendingDown : TrendingUp;
   const rankingBadgeTone = rankingDirection === 'down' ? 'danger' : 'primary';
+  const sentimentBenchmarkLabel = strategicSnapshot?.sentimentBenchmark || 'No Data';
+  const sentimentTone =
+    sentimentBenchmarkLabel === 'Above Average'
+      ? 'primary'
+      : sentimentBenchmarkLabel === 'Below Average'
+      ? 'danger'
+      : 'warning';
 
   const sentimentData = sentimentSeries.map((row) => ({
     date: row.date,
@@ -626,10 +906,10 @@ function DashboardTab({ strategicSnapshot,
 
   return (
     <div className="space-y-8">
-      <section className="rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
+      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <header className="mb-6 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-gray-base">Strategic Performance · {contextLabel}</h2>
+            <h2 className="text-lg font-semibold text-gray-base">Strategic Performance - {contextLabel}</h2>
             <p className="text-sm text-gray-500">
               Snapshot for {contextLabel} vs {referenceLabel}.
             </p>
@@ -648,23 +928,30 @@ function DashboardTab({ strategicSnapshot,
             badgeLabel={gapBadgeLabel}
             badgeTone={gapBadgeTone}
           />
-          <div className="rounded-xl border border-gray-200 p-6 text-center">
-            <div className="text-3xl font-bold text-primary">{categoryRanking.label}</div>
-            <p className="mt-2 text-sm font-medium text-gray-base">Category Ranking</p>
+          <div className="rounded-xl border border-gray-200 px-5 py-4 text-center">
+            <div
+              className={clsx(
+                'mb-2 font-bold tracking-tight',
+                toneValueClasses[sentimentTone] ?? 'text-gray-base',
+              )}
+              style={{ fontSize: 'clamp(1rem, 2.5vw, 1.5rem)' }}
+            >
+              {sentimentBenchmarkLabel}
+            </div>
+            <p className="mt-2 text-sm font-medium text-gray-base">Sentiment Benchmark</p>
             <div
               className={clsx(
                 'mt-3 inline-flex items-center rounded-full px-3 py-1 text-xs font-medium',
-                rankingBadgeTone === 'danger' ? 'bg-danger/10 text-danger' : 'bg-primary/10 text-primary',
+                toneBadgeClasses[sentimentTone] ?? toneBadgeClasses.warning,
               )}
             >
-              <RankingIcon className="mr-1 h-3 w-3" />{' '}
-              {rankingDirection === 'down' ? 'Down' : 'Up'} {categoryRanking.trend?.delta ?? 2} spots
+              vs Competitors
             </div>
           </div>
         </div>
       </section>
 
-      <section className="rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
+      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <header className="mb-6 flex items-center justify-between">
   <div>
     <h2 className="text-lg font-semibold text-gray-base">Sentiment Analysis</h2>
@@ -679,67 +966,73 @@ function DashboardTab({ strategicSnapshot,
     >
       {chartExpanded ? 'Collapse Chart' : 'Expand Chart'}
     </button>
-    <div className="flex items-center gap-4 text-sm text-gray-500">
-      <LegendDot color="#14b8a6" label="Positive Sentiment" />
-      <LegendDot color="#ef4444" label="Negative Sentiment" />
-      {compareEnabled && (
-        <LegendDot color="#9ca3af" label={referenceLabel} dashed />
-      )}
-    </div>
+    <div className="flex items-center gap-1 sm:gap-4 text-xs sm:text-sm text-gray-500 flex-wrap">
+  <div className="block sm:hidden">
+    <LegendDot color="#14b8a6" label="Pos" />
+    <LegendDot color="#ef4444" label="Neg" />
+  </div>
+  <div className="hidden sm:block">
+    <LegendDot color="#14b8a6" label="Positive Sentiment" />
+    <LegendDot color="#ef4444" label="Negative Sentiment" />
+  </div>
+  {compareEnabled && (
+    <LegendDot color="#9ca3af" label={referenceLabel} dashed />
+  )}
+</div>
   </div>
 </header>
-        <div className={chartExpanded ? "h-96" : "h-48"}>
-          {sentimentData.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm text-gray-500">
-              Not enough data yet. Trigger an analysis run to populate this chart.
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={sentimentData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="date" stroke="#666" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis stroke="#666" fontSize={12} tickLine={false} axisLine={false} domain={[0, 100]} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#fff',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '8px',
-                    boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                  }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="positive"
-                  stroke="#14b8a6"
-                  strokeWidth={3}
-                  dot={{ r: 4, strokeWidth: 2, fill: '#14b8a6' }}
-                  activeDot={{ r: 6, fill: '#14b8a6' }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="negative"
-                  stroke="#ef4444"
-                  strokeWidth={3}
-                  dot={{ r: 4, strokeWidth: 2, fill: '#ef4444' }}
-                  activeDot={{ r: 6, fill: '#ef4444' }}
-                />
-                {compareEnabled && (
-                  <Line
-                    type="monotone"
-                    dataKey="competitor"
-                    stroke="#9ca3af"
-                    strokeWidth={2}
-                    strokeDasharray="5 5"
-                    dot={{ r: 3, strokeWidth: 2, fill: '#9ca3af' }}
-                  />
-                )}
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </div>
+       <div className={chartExpanded ? "h-96" : "h-48"} style={{ width: '100%', overflow: 'hidden' }}>
+  {sentimentData.length === 0 ? (
+    <div className="flex h-full items-center justify-center text-sm text-gray-500">
+      Not enough data yet. Trigger an analysis run to populate this chart.
+    </div>
+  ) : (
+    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+      <LineChart data={sentimentData}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+        <XAxis dataKey="date" stroke="#666" fontSize={12} tickLine={false} axisLine={false} />
+        <YAxis stroke="#666" fontSize={12} tickLine={false} axisLine={false} domain={[0, 100]} />
+        <Tooltip
+          contentStyle={{
+            backgroundColor: '#fff',
+            border: '1px solid #e2e8f0',
+            borderRadius: '8px',
+            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+          }}
+        />
+        <Line
+          type="monotone"
+          dataKey="positive"
+          stroke="#14b8a6"
+          strokeWidth={3}
+          dot={{ r: 4, strokeWidth: 2, fill: '#14b8a6' }}
+          activeDot={{ r: 6, fill: '#14b8a6' }}
+        />
+        <Line
+          type="monotone"
+          dataKey="negative"
+          stroke="#ef4444"
+          strokeWidth={3}
+          dot={{ r: 4, strokeWidth: 2, fill: '#ef4444' }}
+          activeDot={{ r: 6, fill: '#ef4444' }}
+        />
+        {compareEnabled && (
+          <Line
+            type="monotone"
+            dataKey="competitor"
+            stroke="#9ca3af"
+            strokeWidth={2}
+            strokeDasharray="5 5"
+            dot={{ r: 3, strokeWidth: 2, fill: '#9ca3af' }}
+          />
+        )}
+      </LineChart>
+    </ResponsiveContainer>
+  )}
+</div>
       </section>
 
-      <section className="grid gap-8 md:grid-cols-2">
+      <section className="grid gap-4 sm:gap-8 grid-cols-1 lg:grid-cols-2">
         <ExpandableCard
           title="Top 3 Pain Points"
           accent="danger"
@@ -757,20 +1050,23 @@ function DashboardTab({ strategicSnapshot,
   );
 }
 function ScoreCard({ title, value, badgeLabel, badgeTone = 'primary' }) {
-  const toneClasses = {
-    primary: 'bg-primary/10 text-primary',
-    warning: 'bg-warning/10 text-warning',
-    danger: 'bg-danger/10 text-danger',
-  };
 
   return (
-    <div className="rounded-xl border border-gray-200 p-6 text-center">
-      <div className="text-3xl font-bold text-gray-base">{value}</div>
+    <div className="rounded-xl border border-gray-200 px-5 py-4 text-center">
+      <div
+        className={clsx(
+          'font-bold tracking-tight',
+          toneValueClasses[badgeTone] ?? 'text-gray-base',
+        )}
+        style={{ fontSize: 'clamp(1rem, 2.5vw, 1.5rem)' }}
+      >
+        {value}
+      </div>
       <p className="mt-2 text-sm font-medium text-gray-base">{title}</p>
       <div
         className={clsx(
           'mt-3 inline-flex items-center rounded-full px-3 py-1 text-xs font-medium',
-          toneClasses[badgeTone] || toneClasses.primary,
+          toneBadgeClasses[badgeTone] ?? toneBadgeClasses.primary,
         )}
       >
         {badgeLabel}
@@ -778,10 +1074,10 @@ function ScoreCard({ title, value, badgeLabel, badgeTone = 'primary' }) {
     </div>
   );
 }
+function LegendDot({ color, label, dashed = false, className }) {
 
-function LegendDot({ color, label, dashed = false }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className={clsx("flex items-center gap-2", className)}>
       <span
         className={clsx('h-3 w-3 rounded-full', dashed && 'border border-dashed')}
         style={{ backgroundColor: dashed ? 'transparent' : color, borderColor: color }}
@@ -799,7 +1095,7 @@ function ExpandableCard({ title, accent, items, emptyMessage }) {
       : { badge: 'bg-primary/10 text-primary', border: 'border-primary/40' };
 
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+    <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm overflow-hidden">
       <h3 className="text-lg font-semibold text-gray-base">{title}</h3>
       <div className="mt-6 space-y-4">
         {(!items || items.length === 0) && <p className="text-sm text-gray-500">{emptyMessage}</p>}
@@ -815,9 +1111,9 @@ function ExpandableCard({ title, accent, items, emptyMessage }) {
                   {index + 1}
                 </span>
                 <div>
-                  <h4 className="font-medium text-gray-base">{item.title}</h4>
-                  <p className="text-xs text-gray-500">
-                    {item.mentions || 0} mentions • {item.percentage || 0}% of reviews
+                  <h4 className="text-sm sm:text-base font-medium text-gray-base break-words leading-tight">{item.title}</h4>
+                  <p className="text-xs text-gray-500 break-words">
+                    {item.mentions || 0} mentions - {item.percentage || 0}% of reviews
                   </p>
                 </div>
               </div>
@@ -939,7 +1235,7 @@ function CompetitorAnalysisTab({ statusData, selectedProject, onStartAnalysis })
           <ul className="mt-3 space-y-2 text-xs text-warning/80">
             {activeTasks.map((task) => (
               <li key={task.task_id}>
-                {task.app_name}: {task.task_type} Ã‚Â· {Math.round(task.progress_percent || 0)}%
+                {task.app_name}: {task.task_type} - {Math.round(task.progress_percent || 0)}%
               </li>
             ))}
           </ul>
@@ -950,6 +1246,7 @@ function CompetitorAnalysisTab({ statusData, selectedProject, onStartAnalysis })
 }
 
 function PainStrengthsTab({ painPoints, strengths }) {
+
   return (
     <div className="grid gap-8 md:grid-cols-2">
       <ExpandableCard
@@ -968,7 +1265,7 @@ function PainStrengthsTab({ painPoints, strengths }) {
   );
 }
 
-function ProjectSettingsTab({ selectedProject, projectsState, onCreateProject, onAddCompetitor }) {
+function ProjectSettingsTab({ selectedProject, projectsState, onCreateProject, onAddCompetitor, competitors = [], onSelectCompetitor, onDeleteCompetitor }) {
   const userLimits = projectsState.userLimits || {};
 
   return (
@@ -976,7 +1273,7 @@ function ProjectSettingsTab({ selectedProject, projectsState, onCreateProject, o
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-gray-base">Create Project</h2>
         <p className="mt-1 text-sm text-gray-500">
-          Projects ({projectsState.projects.length}/{userLimits.project_limit || 1}) Ã‚Â· Subscription tier:{' '}
+          Projects ({projectsState.projects.length}/{userLimits.project_limit || 1}) - Subscription tier:{' '}
           {userLimits.subscription_tier?.toUpperCase()}
         </p>
         <form onSubmit={onCreateProject} className="mt-4 grid gap-4 md:grid-cols-3">
@@ -1040,6 +1337,41 @@ function ProjectSettingsTab({ selectedProject, projectsState, onCreateProject, o
               </button>
             </div>
           </form>
+
+          {competitors.length > 0 && (
+            <div className="mt-6 space-y-3">
+              <h3 className="text-sm font-semibold text-gray-base">Existing Competitors</h3>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {competitors.map((competitor) => (
+                  <div
+                    key={competitor.appId}
+                    className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm"
+                  >
+                    <div>
+                      <div className="font-medium text-gray-base">{competitor.name}</div>
+                      <div className="text-xs text-gray-500">{competitor.status ? `Import ${competitor.status}` : 'Ready'}</div>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={() => onSelectCompetitor?.(competitor.appId)}
+                        className="rounded-lg border border-primary/30 px-3 py-1 text-xs font-semibold text-primary hover:bg-primary/10"
+                      >
+                        View
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteCompetitor?.(competitor.competitorId, competitor.appId)}
+                        className="rounded-lg border border-danger/30 px-3 py-1 text-xs font-semibold text-danger hover:bg-danger/10"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
     </div>
@@ -1047,6 +1379,7 @@ function ProjectSettingsTab({ selectedProject, projectsState, onCreateProject, o
 }
 
 function ComingSoon({ title }) {
+
   return (
     <div className="rounded-xl border border-dashed border-gray-300 bg-white p-16 text-center shadow-sm">
       <h2 className="text-2xl font-semibold text-gray-base">{title}</h2>
@@ -1056,6 +1389,7 @@ function ComingSoon({ title }) {
 }
 
 export default PremiumDashboard;
+
 
 
 

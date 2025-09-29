@@ -92,7 +92,7 @@ def list_projects(request):
 
     projects_data = []
     for project in projects:
-        competitors_count = CompetitorApp.objects.filter(project=project).count()
+        competitors_count = 0
         projects_data.append({
             'id': project.id,
             'name': project.name,

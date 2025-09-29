@@ -18,106 +18,89 @@ export const TaskProvider = ({ children }) => {
   const [globalLoading, setGlobalLoading] = useState(false);
 
   // Helper functions defined first
+  const normalizeStatus = (status) => (status || '').toString().toUpperCase();
+
   const getStatusMessage = (status) => {
-    switch (status) {
-      case 'PENDING': return 'Queued for processing...';
-      case 'PROGRESS': return 'Analyzing reviews...';
-      case 'SUCCESS': return 'Analysis complete!';
-      case 'FAILURE': return 'Analysis failed';
-      default: return 'Processing...';
+    switch (normalizeStatus(status)) {
+      case 'PENDING':
+      case 'STARTED':
+        return 'Queued for processing...';
+      case 'PROGRESS':
+        return 'Analyzing reviews...';
+      case 'SUCCESS':
+        return 'Analysis complete!';
+      case 'FAILURE':
+      case 'REVOKED':
+        return 'Analysis failed';
+      default:
+        return 'Processing...';
     }
   };
 
   const handleTaskSuccess = useCallback((appId, result) => {
-    setRunningTasks(prev => {
+    const currentTask = runningTasks.get(appId);
+
+    setRunningTasks((prev) => {
       const newMap = new Map(prev);
       newMap.delete(appId);
+      setGlobalLoading(newMap.size > 0);
       return newMap;
     });
 
-    setTaskResults(prev => new Map(prev.set(appId, result)));
-    setGlobalLoading(prev => {
-      const newMap = new Map(runningTasks);
-      newMap.delete(appId);
-      return newMap.size > 0;
+    setTaskResults((prev) => {
+      const newMap = new Map(prev);
+      newMap.set(appId, result);
+      return newMap;
     });
 
-    // Trigger data refresh
     window.dispatchEvent(new CustomEvent('taskCompleted', {
-      detail: { appId, result, success: true }
+      detail: {
+        appId,
+        result,
+        success: true,
+        analysisType: currentTask?.analysisType || 'quick',
+      },
     }));
   }, [runningTasks]);
 
   const handleTaskFailure = useCallback((appId, error) => {
-    setRunningTasks(prev => {
+    const currentTask = runningTasks.get(appId);
+
+    setRunningTasks((prev) => {
       const newMap = new Map(prev);
       newMap.delete(appId);
+      setGlobalLoading(newMap.size > 0);
       return newMap;
-    });
-
-    setGlobalLoading(prev => {
-      const newMap = new Map(runningTasks);
-      newMap.delete(appId);
-      return newMap.size > 0;
     });
 
     console.error(`Task failed for ${appId}:`, error);
 
-    // Trigger error handling
     window.dispatchEvent(new CustomEvent('taskFailed', {
-      detail: { appId, error }
+      detail: {
+        appId,
+        error,
+        analysisType: currentTask?.analysisType || 'quick',
+      },
     }));
   }, [runningTasks]);
 
   const handleTaskTimeout = useCallback((appId) => {
-    setRunningTasks(prev => {
+    const currentTask = runningTasks.get(appId);
+
+    setRunningTasks((prev) => {
       const newMap = new Map(prev);
       newMap.delete(appId);
+      setGlobalLoading(newMap.size > 0);
       return newMap;
     });
 
-    setGlobalLoading(prev => {
-      const newMap = new Map(runningTasks);
-      newMap.delete(appId);
-      return newMap.size > 0;
-    });
-
     window.dispatchEvent(new CustomEvent('taskTimeout', {
-      detail: { appId }
+      detail: {
+        appId,
+        analysisType: currentTask?.analysisType || 'quick',
+      },
     }));
   }, [runningTasks]);
-
-  // Start a new background task
-  const startTask = useCallback(async (appId, projectId = null) => {
-    try {
-      const payload = { app_id: appId };
-      if (projectId) payload.project_id = projectId;
-
-      const response = await apiClient.post('/api/trigger-insights/', payload);
-      const taskId = response.data.task_id;
-
-      setRunningTasks(prev => new Map(prev.set(appId, {
-        taskId,
-        appId,
-        projectId,
-        status: 'PENDING',
-        progress: 0,
-        step: 'Initializing analysis...',
-        startTime: new Date(),
-        estimatedDuration: 60000 // 1 minute estimate
-      })));
-
-      setGlobalLoading(true);
-
-      // Start polling for this specific task
-      pollTaskStatus(taskId, appId);
-
-      return taskId;
-    } catch (error) {
-      console.error('Error starting task:', error);
-      throw error;
-    }
-  }, []);
 
   // Poll task status with exponential backoff
   const pollTaskStatus = useCallback(async (taskId, appId) => {
@@ -127,48 +110,45 @@ export const TaskProvider = ({ children }) => {
 
     const poll = async () => {
       try {
-        const response = await apiClient.get(`/api/task-status/${taskId}/`);
-        const { status, result, progress } = response.data;
+        const response = await apiClient.get(`/api/tasks/${taskId}/detail/`);
+        const data = response.data || {};
+        const status = (data.status || 'pending').toLowerCase();
 
-        setRunningTasks(prev => {
+        setRunningTasks((prev) => {
           const newMap = new Map(prev);
           if (newMap.has(appId)) {
             const existingTask = newMap.get(appId);
             newMap.set(appId, {
               ...existingTask,
               status,
-              progress: progress?.progress || 0,
-              step: progress?.step || getStatusMessage(status),
-              currentReviews: progress?.current_reviews || 0,
-              totalReviews: progress?.total_reviews || 1000
+              progress: Number.isFinite(data.progress_percent) ? data.progress_percent : existingTask.progress || 0,
+              step: data.result_message || getStatusMessage(status),
+              currentReviews: data.current_reviews ?? existingTask.currentReviews ?? 0,
+              totalReviews: data.target_reviews ?? existingTask.totalReviews ?? 1000,
             });
           }
           return newMap;
         });
 
-        // Handle completion
-        if (status === 'SUCCESS') {
-          handleTaskSuccess(appId, result);
-          return; // Stop polling
+        if (status === 'success') {
+          handleTaskSuccess(appId, data);
+          return;
         }
 
-        if (status === 'FAILURE') {
-          handleTaskFailure(appId, result);
-          return; // Stop polling
+        if (status === 'failure' || status === 'revoked') {
+          handleTaskFailure(appId, data.error_message || data);
+          return;
         }
 
-        // Continue polling if still running
-        if (status === 'PENDING' || status === 'PROGRESS') {
+        if (status === 'pending' || status === 'started' || status === 'progress') {
           pollCount++;
 
-          // Exponential backoff: increase interval slightly over time
-          if (pollCount > 10) pollInterval = 3000; // 3s after 20 seconds
-          if (pollCount > 30) pollInterval = 5000; // 5s after 1 minute
+          if (pollCount > 10) pollInterval = 3000;
+          if (pollCount > 30) pollInterval = 5000;
 
           if (pollCount < maxPolls) {
             setTimeout(poll, pollInterval);
           } else {
-            // Timeout after max polls
             handleTaskTimeout(appId);
           }
         }
@@ -179,7 +159,74 @@ export const TaskProvider = ({ children }) => {
     };
 
     poll();
-  }, [handleTaskSuccess, handleTaskFailure, handleTaskTimeout]);
+  }, [handleTaskSuccess, handleTaskFailure, handleTaskTimeout, getStatusMessage]);
+
+  // Start a new background task
+  const startTask = useCallback(async (appId, projectId = null, analysisType = 'quick') => {
+    try {
+      const payload = {
+        app_id: appId,
+        analysis_type: analysisType,
+      };
+
+      if (projectId) {
+        payload.project_id = projectId;
+      }
+
+      const response = await apiClient.post('/api/analysis/start/', payload);
+      const taskId = response.data.task_id;
+
+      setRunningTasks((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(appId, {
+          taskId,
+          appId,
+          projectId,
+          analysisType,
+          status: 'pending',
+          progress: 0,
+          step: 'Initializing analysis...',
+          startTime: new Date(),
+          estimatedDuration: analysisType === 'full' ? 300000 : 60000,
+        });
+        return newMap;
+      });
+
+      setGlobalLoading(true);
+
+      pollTaskStatus(taskId, appId);
+
+      return taskId;
+    } catch (error) {
+      if (error.response?.status === 409 && error.response?.data?.existing_task_id) {
+        const taskId = error.response.data.existing_task_id;
+        const existingStatus = error.response.data.task_status || 'pending';
+
+        setRunningTasks((prev) => {
+          const newMap = new Map(prev);
+          newMap.set(appId, {
+            taskId,
+            appId,
+            projectId,
+            analysisType,
+            status: existingStatus,
+            progress: 0,
+            step: getStatusMessage(existingStatus),
+            startTime: new Date(),
+            estimatedDuration: analysisType === 'full' ? 300000 : 60000,
+          });
+          return newMap;
+        });
+
+        setGlobalLoading(true);
+        pollTaskStatus(taskId, appId);
+        return taskId;
+      }
+
+      console.error('Error starting task:', error);
+      throw error;
+    }
+  }, [pollTaskStatus, getStatusMessage]);
 
   const getTaskStatus = useCallback((appId) => {
     return runningTasks.get(appId);
