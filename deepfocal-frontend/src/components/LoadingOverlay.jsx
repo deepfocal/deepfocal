@@ -8,7 +8,9 @@ const LoadingOverlay = ({ appId }) => {
 
   if (!taskStatus) return null;
 
-  const progressPercentage = taskStatus.progress || 0;
+  const progressPercentage = Math.max(0, Math.min(100, Number(taskStatus.progress ?? 0)));
+  const currentReviews = Number.isFinite(Number(taskStatus.currentReviews)) ? Number(taskStatus.currentReviews) : null;
+  const totalReviews = Number.isFinite(Number(taskStatus.totalReviews)) ? Number(taskStatus.totalReviews) : null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -37,13 +39,13 @@ const LoadingOverlay = ({ appId }) => {
 
           {/* Progress text */}
           <p className="text-xs text-gray-500 mb-2">
-            {progressPercentage}% complete
+            {Math.round(progressPercentage)}% complete
           </p>
 
           {/* Review count if available */}
-          {taskStatus.currentReviews && (
+          {currentReviews !== null && totalReviews !== null && (
             <p className="text-xs text-gray-400">
-              {taskStatus.currentReviews} / {taskStatus.totalReviews} reviews processed
+              {currentReviews} / {totalReviews} reviews processed
             </p>
           )}
         </div>

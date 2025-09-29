@@ -53,12 +53,14 @@ export const TaskProvider = ({ children }) => {
       return newMap;
     });
 
+    const resolvedType = (result?.task_type || currentTask?.analysisType || 'quick').toLowerCase();
+
     window.dispatchEvent(new CustomEvent('taskCompleted', {
       detail: {
         appId,
         result,
         success: true,
-        analysisType: currentTask?.analysisType || 'quick',
+        analysisType: resolvedType,
       },
     }));
   }, [runningTasks]);
@@ -75,11 +77,13 @@ export const TaskProvider = ({ children }) => {
 
     console.error(`Task failed for ${appId}:`, error);
 
+    const resolvedType = (currentTask?.analysisType || 'quick').toLowerCase();
+
     window.dispatchEvent(new CustomEvent('taskFailed', {
       detail: {
         appId,
         error,
-        analysisType: currentTask?.analysisType || 'quick',
+        analysisType: resolvedType,
       },
     }));
   }, [runningTasks]);
@@ -94,10 +98,12 @@ export const TaskProvider = ({ children }) => {
       return newMap;
     });
 
+    const resolvedType = (currentTask?.analysisType || 'quick').toLowerCase();
+
     window.dispatchEvent(new CustomEvent('taskTimeout', {
       detail: {
         appId,
-        analysisType: currentTask?.analysisType || 'quick',
+        analysisType: resolvedType,
       },
     }));
   }, [runningTasks]);
@@ -118,13 +124,23 @@ export const TaskProvider = ({ children }) => {
           const newMap = new Map(prev);
           if (newMap.has(appId)) {
             const existingTask = newMap.get(appId);
+
+            const parsedProgress = Number.parseFloat(data.progress_percent ?? data.progressPercent);
+            const parsedCurrent = Number.parseInt(data.current_reviews ?? data.currentReviews, 10);
+            const parsedTotal = Number.parseInt(data.target_reviews ?? data.totalReviews, 10);
+            const nextProgress = Number.isFinite(parsedProgress) ? Math.max(0, Math.min(100, parsedProgress)) : existingTask.progress || 0;
+            const nextCurrent = Number.isFinite(parsedCurrent) ? Math.max(parsedCurrent, 0) : existingTask.currentReviews ?? 0;
+            const nextTotal = Number.isFinite(parsedTotal) ? Math.max(parsedTotal, 0) : existingTask.totalReviews ?? 1000;
+            const taskType = (data.task_type || data.analysis_type || existingTask.analysisType || 'quick').toLowerCase();
+
             newMap.set(appId, {
               ...existingTask,
+              analysisType: taskType,
               status,
-              progress: Number.isFinite(data.progress_percent) ? data.progress_percent : existingTask.progress || 0,
-              step: data.result_message || getStatusMessage(status),
-              currentReviews: data.current_reviews ?? existingTask.currentReviews ?? 0,
-              totalReviews: data.target_reviews ?? existingTask.totalReviews ?? 1000,
+              progress: nextProgress,
+              step: data.result_message || data.status || getStatusMessage(status),
+              currentReviews: nextCurrent,
+              totalReviews: nextTotal,
             });
           }
           return newMap;
@@ -163,10 +179,12 @@ export const TaskProvider = ({ children }) => {
 
   // Start a new background task
   const startTask = useCallback(async (appId, projectId = null, analysisType = 'quick') => {
+    const normalizedType = (analysisType || 'quick').toLowerCase();
+
     try {
       const payload = {
         app_id: appId,
-        analysis_type: analysisType,
+        analysis_type: normalizedType,
       };
 
       if (projectId) {
@@ -182,12 +200,12 @@ export const TaskProvider = ({ children }) => {
           taskId,
           appId,
           projectId,
-          analysisType,
+          analysisType: normalizedType,
           status: 'pending',
           progress: 0,
           step: 'Initializing analysis...',
           startTime: new Date(),
-          estimatedDuration: analysisType === 'full' ? 300000 : 60000,
+          estimatedDuration: normalizedType === 'full' ? 300000 : 60000,
         });
         return newMap;
       });
@@ -201,6 +219,7 @@ export const TaskProvider = ({ children }) => {
       if (error.response?.status === 409 && error.response?.data?.existing_task_id) {
         const taskId = error.response.data.existing_task_id;
         const existingStatus = error.response.data.task_status || 'pending';
+        const existingType = (error.response.data.task_type || normalizedType || 'quick').toLowerCase();
 
         setRunningTasks((prev) => {
           const newMap = new Map(prev);
@@ -208,12 +227,12 @@ export const TaskProvider = ({ children }) => {
             taskId,
             appId,
             projectId,
-            analysisType,
+            analysisType: existingType,
             status: existingStatus,
             progress: 0,
             step: getStatusMessage(existingStatus),
             startTime: new Date(),
-            estimatedDuration: analysisType === 'full' ? 300000 : 60000,
+            estimatedDuration: existingType === 'full' ? 300000 : 60000,
           });
           return newMap;
         });

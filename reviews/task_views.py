@@ -168,7 +168,8 @@ def start_analysis(request):
         return Response({
             'error': f'Analysis already in progress for {app_name}',
             'existing_task_id': existing_task.task_id,
-            'task_status': existing_task.status
+            'task_status': existing_task.status,
+            'task_type': existing_task.task_type,
         }, status=status.HTTP_409_CONFLICT)
 
     # Get user profile

@@ -298,68 +298,82 @@ function PremiumDashboard() {
       return;
     }
 
-    try {
-      setLoadingDashboard(true);
+    setLoadingDashboard(true);
+    setPainPoints([]);
+    setStrengths([]);
 
-      const [statusResponse, sentimentResponse, painResponse, strengthResponse] = await Promise.all([
-          apiClient.get(`/api/projects/${projectId}/status/`),
-          apiClient.get(`/api/projects/${projectId}/sentiment-trends/`, {
-            params: {
-              app_id: appMeta.appId,
-              date_range: dateRange,
-              ...(appMeta.compareTo ? { compare_to: appMeta.compareTo } : {}),
-            },
-          }),
-          apiClient.get('/api/enhanced-insights/', {
-            params: { app_id: appMeta.appId },
-          }),
-          apiClient.get('/api/strengths/', {
-            params: { app_id: appMeta.appId },
-          }),
-        ]);
+    try {
+      const statusPromise = apiClient.get(`/api/projects/${projectId}/status/`);
+      const sentimentPromise = apiClient.get(`/api/projects/${projectId}/sentiment-trends/`, {
+        params: {
+          app_id: appMeta.appId,
+          date_range: dateRange,
+          ...(appMeta.compareTo ? { compare_to: appMeta.compareTo } : {}),
+        },
+      });
+
+      const [statusResponse, sentimentResponse] = await Promise.all([statusPromise, sentimentPromise]);
 
       setStatusData(statusResponse.data);
       setSentimentSeries(sentimentResponse.data?.series || []);
-
-      const painPayload = painResponse.data || {};
-      const totalNeg = painPayload.review_count_analyzed || 0;
-      const mappedPain = (painPayload.lda_pain_points || []).map((item, index) => {
-        const mentions = item.review_count || item.sample_size || item.quotes?.length || 0;
-        const denominator = totalNeg || item.review_count || 1;
-        const baseValue = item.review_percentage || mentions;
-        const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
-        return {
-          id: `${appMeta.appId}-pain-${index}`,
-          title: item.issue,
-          mentions,
-          percentage: Number.isFinite(percentage) ? percentage : 0,
-          quotes: item.quotes || [],
-        };
-      });
-      setPainPoints(mappedPain.slice(0, 3));
-
-      const strengthPayload = strengthResponse.data || {};
-      const totalPos = strengthPayload.review_count_analyzed || 0;
-      const mappedStrengths = (strengthPayload.lda_strengths || []).map((item, index) => {
-        const mentions = item.review_count || item.sample_size || item.quotes?.length || 0;
-        const denominator = totalPos || item.review_count || 1;
-        const baseValue = item.review_percentage || mentions;
-        const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
-        return {
-          id: `${appMeta.appId}-strength-${index}`,
-          title: item.issue,
-          mentions,
-          percentage: Number.isFinite(percentage) ? percentage : 0,
-          quotes: item.quotes || [],
-        };
-      });
-      setStrengths(mappedStrengths.slice(0, 3));
-
       setPanelMessage('');
+      setLoadingDashboard(false);
+
+      const [painResult, strengthResult] = await Promise.allSettled([
+        apiClient.get('/api/enhanced-insights/', {
+          params: { app_id: appMeta.appId },
+        }),
+        apiClient.get('/api/strengths/', {
+          params: { app_id: appMeta.appId },
+        }),
+      ]);
+
+      if (painResult.status === 'fulfilled') {
+        const painPayload = painResult.value.data || {};
+        const totalNeg = painPayload.review_count_analyzed || 0;
+        const mappedPain = (painPayload.lda_pain_points || []).map((item, index) => {
+          const mentions = item.review_count || item.sample_size || item.quotes?.length || 0;
+          const denominator = totalNeg || item.review_count || 1;
+          const baseValue = item.review_percentage || mentions;
+          const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
+          return {
+            id: `${appMeta.appId}-pain-${index}`,
+            title: item.issue,
+            mentions,
+            percentage: Number.isFinite(percentage) ? percentage : 0,
+            quotes: item.quotes || [],
+          };
+        });
+        setPainPoints(mappedPain.slice(0, 3));
+      } else {
+        console.warn('Pain point insights unavailable', painResult.reason);
+        setPainPoints([]);
+      }
+
+      if (strengthResult.status === 'fulfilled') {
+        const strengthPayload = strengthResult.value.data || {};
+        const totalPos = strengthPayload.review_count_analyzed || 0;
+        const mappedStrengths = (strengthPayload.lda_strengths || []).map((item, index) => {
+          const mentions = item.review_count || item.sample_size || item.quotes?.length || 0;
+          const denominator = totalPos || item.review_count || 1;
+          const baseValue = item.review_percentage || mentions;
+          const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
+          return {
+            id: `${appMeta.appId}-strength-${index}`,
+            title: item.issue,
+            mentions,
+            percentage: Number.isFinite(percentage) ? percentage : 0,
+            quotes: item.quotes || [],
+          };
+        });
+        setStrengths(mappedStrengths.slice(0, 3));
+      } else {
+        console.warn('Strength insights unavailable', strengthResult.reason);
+        setStrengths([]);
+      }
     } catch (error) {
       console.error('Failed to load dashboard analytics', error);
       setPanelMessage('Unable to load dashboard analytics. Please retry.');
-    } finally {
       setLoadingDashboard(false);
     }
   };
@@ -557,17 +571,19 @@ function PremiumDashboard() {
       return;
     }
 
-    const analysisLabel = analysisType === 'full' ? 'Full analysis' : 'Quick analysis';
+    const normalizedType = (analysisType || 'quick').toLowerCase();
+    const analysisLabel = normalizedType === 'full' ? 'Full analysis' : 'Quick analysis';
 
     try {
-      await startTask(appId, selectedProjectId, analysisType);
+      await startTask(appId, selectedProjectId, normalizedType);
       setPanelMessage(`${analysisLabel} started in background. You can continue using the dashboard.`);
 
       const handleTaskComplete = (event) => {
         if (event.detail.appId !== appId) {
           return;
         }
-        const completedLabel = event.detail.analysisType === 'full' ? 'Full analysis' : 'Quick analysis';
+        const completedType = (event.detail.analysisType || event.detail.result?.task_type || 'quick').toLowerCase();
+        const completedLabel = completedType === 'full' ? 'Full analysis' : 'Quick analysis';
         loadProjectAnalytics(selectedProjectId, selectedAppMeta);
         setPanelMessage(`${completedLabel} complete! Data has been refreshed.`);
         cleanupListeners();
@@ -577,7 +593,8 @@ function PremiumDashboard() {
         if (event.detail.appId !== appId) {
           return;
         }
-        const failedLabel = event.detail.analysisType === 'full' ? 'Full analysis' : 'Quick analysis';
+        const failedType = (event.detail.analysisType || event.detail.result?.task_type || 'quick').toLowerCase();
+        const failedLabel = failedType === 'full' ? 'Full analysis' : 'Quick analysis';
         setPanelMessage(event.detail.error || `${failedLabel} failed. Please try again.`);
         cleanupListeners();
       };
@@ -586,7 +603,8 @@ function PremiumDashboard() {
         if (event.detail.appId !== appId) {
           return;
         }
-        const timedOutLabel = event.detail.analysisType === 'full' ? 'Full analysis' : 'Quick analysis';
+        const timeoutType = (event.detail.analysisType || event.detail.result?.task_type || 'quick').toLowerCase();
+        const timedOutLabel = timeoutType === 'full' ? 'Full analysis' : 'Quick analysis';
         setPanelMessage(`${timedOutLabel} is taking longer than expected. Please try again soon.`);
         cleanupListeners();
       };
