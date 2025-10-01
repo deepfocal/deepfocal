@@ -346,38 +346,90 @@ def import_apple_app_store_reviews(app_id):
     logger.info(summary)
     return summary
 
-def extract_pain_points():
-    """
-    Analyze reviews to identify top pain points based on negative sentiment and keywords.
-    Returns a list of pain points with frequency counts.
-    """
-    from collections import Counter
 
-    # Common pain point keywords grouped by category
-    pain_point_keywords = {
-        'crashes': ['crash', 'crashing', 'crashed', 'freeze', 'freezing', 'frozen', 'bug', 'bugs'],
-        'performance': ['slow', 'sluggish', 'lag', 'lagging', 'loading', 'takes forever', 'performance'],
-        'login_issues': ['login', 'log in', 'sign in', 'signin', 'password', 'authentication', 'cant login'],
-        'ui_problems': ['confusing', 'hard to use', 'difficult', 'interface', 'navigation', 'design'],
-        'missing_features': ['missing', 'need', 'should have', 'lacking', 'want', 'wish'],
-        'sync_issues': ['sync', 'syncing', 'synchronize', 'not saving', 'lost data']
-    }
+def extract_pain_points(app_id=None):
+    """
+    Use LDA topic modeling to discover pain points from negative reviews.
+    This replaces the simple keyword matching with actual AI-driven topic discovery.
+    """
+    from sklearn.feature_extraction.text import CountVectorizer
+    from sklearn.decomposition import LatentDirichletAllocation
+    import numpy as np
 
     # Get negative reviews (sentiment < -0.1 to focus on clearly negative ones)
     negative_reviews = Review.objects.filter(sentiment_score__lt=-0.1)
 
-    pain_point_counts = Counter()
+    if app_id:
+        negative_reviews = negative_reviews.filter(app_id=app_id)
 
-    for review in negative_reviews:
-        content_lower = review.content.lower()
+    if negative_reviews.count() < 10:
+        logger.warning(f"Not enough negative reviews ({negative_reviews.count()}) for topic modeling")
+        return []
 
-        for category, keywords in pain_point_keywords.items():
-            for keyword in keywords:
-                if keyword in content_lower:
-                    pain_point_counts[category] += 1
-                    break  # Only count once per review per category
+    # Extract review text
+    review_texts = [review.content for review in negative_reviews if review.content]
 
-    return pain_point_counts.most_common(3)
+    if len(review_texts) < 10:
+        return []
+
+    # Vectorize the text (convert to numbers for LDA)
+    vectorizer = CountVectorizer(
+        max_features=1000,  # Limit vocabulary size
+        stop_words='english',  # Remove common words like "the", "a", "an"
+        min_df=2,  # Word must appear in at least 2 documents
+        max_df=0.8  # Ignore words that appear in more than 80% of documents
+    )
+
+    try:
+        doc_term_matrix = vectorizer.fit_transform(review_texts)
+    except ValueError as e:
+        logger.error(f"Error vectorizing reviews: {e}")
+        return []
+
+    # Run LDA to discover topics
+    n_topics = 5  # Find top 5 pain point topics
+    lda_model = LatentDirichletAllocation(
+        n_components=n_topics,
+        random_state=42,
+        max_iter=20,
+        n_jobs=-1  # Use all CPU cores
+    )
+
+    try:
+        lda_model.fit(doc_term_matrix)
+    except Exception as e:
+        logger.error(f"Error fitting LDA model: {e}")
+        return []
+
+    # Extract top words for each topic
+    feature_names = vectorizer.get_feature_names_out()
+    topics = []
+
+    for topic_idx, topic in enumerate(lda_model.components_):
+        # Get top 5 words for this topic
+        top_words_idx = topic.argsort()[-5:][::-1]
+        top_words = [feature_names[i] for i in top_words_idx]
+
+        # Create a readable topic name from top words
+        topic_name = ", ".join(top_words[:3])  # Use top 3 words as name
+
+        # Count how many reviews are primarily about this topic
+        doc_topic_distribution = lda_model.transform(doc_term_matrix)
+        primary_topic_docs = np.argmax(doc_topic_distribution, axis=1)
+        mentions = np.sum(primary_topic_docs == topic_idx)
+
+        if mentions > 0:  # Only include topics with actual mentions
+            topics.append({
+                'topic_name': topic_name.title(),
+                'keywords': top_words,
+                'mentions': int(mentions)
+            })
+
+    # Sort by number of mentions
+    topics.sort(key=lambda x: x['mentions'], reverse=True)
+
+    # Return top 3 pain points
+    return topics[:3]
 
 
 @shared_task

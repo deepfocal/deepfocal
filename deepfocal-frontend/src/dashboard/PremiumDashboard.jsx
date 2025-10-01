@@ -289,8 +289,6 @@ function PremiumDashboard() {
           user_limits: userLimits = {},
           status,
           sentiment,
-          pain_points: demoPainPoints,
-          strengths: demoStrengths,
           default_project_id: defaultProjectId,
           default_app_id: defaultAppId,
         } = response.data || {};
@@ -318,14 +316,6 @@ function PremiumDashboard() {
           setSentimentSeries([]);
         }
 
-        if (homeAppId) {
-          setPainPoints(demoPainPoints?.[homeAppId] || []);
-          setStrengths(demoStrengths?.[homeAppId] || []);
-        } else {
-          setPainPoints([]);
-          setStrengths([]);
-        }
-
         setPanelMessage('Demo mode: sample data loaded.');
         return { projects, userLimits };
       } catch (error) {
@@ -343,6 +333,8 @@ function PremiumDashboard() {
       const response = await apiClient.get('/api/projects/');
       const { projects = [], user_limits: userLimits } = response.data || {};
       setProjectsState({ projects, userLimits });
+      setPainPoints([]);
+      setStrengths([]);
 
       setSelectedProjectId((currentSelection) => {
         if (currentSelection && projects.some((project) => project.id === currentSelection)) {
@@ -389,15 +381,8 @@ function PremiumDashboard() {
         setSentimentSeries([]);
       }
 
-      const painMap = dataset.pain_points || {};
-      const strengthMap = dataset.strengths || {};
-      if (fallbackAppId) {
-        setPainPoints(painMap[fallbackAppId] || []);
-        setStrengths(strengthMap[fallbackAppId] || []);
-      } else {
-        setPainPoints([]);
-        setStrengths([]);
-      }
+      setPainPoints([]);
+      setStrengths([]);
 
       if (dataset.status) {
         setStatusData(dataset.status);
@@ -431,32 +416,46 @@ function PremiumDashboard() {
       setPanelMessage('');
       setLoadingDashboard(false);
 
+      const insightsAppId = appMeta.appId || 'com.clickup.app';
+
       const [painResult, strengthResult] = await Promise.allSettled([
         apiClient.get('/api/enhanced-insights/', {
-          params: { app_id: appMeta.appId },
+          params: { app_id: insightsAppId },
         }),
         apiClient.get('/api/strengths/', {
-          params: { app_id: appMeta.appId },
+          params: { app_id: insightsAppId },
         }),
       ]);
 
       if (painResult.status === 'fulfilled') {
         const painPayload = painResult.value.data || {};
         const totalNeg = painPayload.review_count_analyzed || 0;
-        const mappedPain = (painPayload.lda_pain_points || []).map((item, index) => {
-          const mentions = item.review_count || item.sample_size || item.quotes?.length || 0;
+        const rawPainPoints = Array.isArray(painPayload.lda_pain_points)
+          ? painPayload.lda_pain_points
+          : [];
+        const mappedPain = rawPainPoints.map((item, index) => {
+          const quotes = Array.isArray(item.quotes) ? item.quotes.filter(Boolean) : [];
+          const mentions = item.review_count || item.sample_size || quotes.length || 0;
           const denominator = totalNeg || item.review_count || 1;
           const baseValue = item.review_percentage || mentions;
           const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
+          const keywords = Array.isArray(item.keywords) ? item.keywords.filter(Boolean) : [];
+          const coherenceScore =
+            typeof item.coherence_score === 'number' ? Math.round(item.coherence_score * 100) / 100 : null;
           return {
-            id: `${appMeta.appId}-pain-${index}`,
+            id: `${insightsAppId}-pain-${index}`,
             title: item.issue,
             mentions,
             percentage: Number.isFinite(percentage) ? percentage : 0,
-            quotes: item.quotes || [],
+            quotes,
+            keywords,
+            coherenceScore,
           };
         });
-        setPainPoints(mappedPain.slice(0, 3));
+        const cleanedPain = mappedPain
+          .filter((item) => item.title && (item.mentions > 0 || item.quotes.length > 0))
+          .slice(0, 3);
+        setPainPoints(cleanedPain);
       } else {
         console.warn('Pain point insights unavailable', painResult.reason);
         setPainPoints([]);
@@ -465,20 +464,32 @@ function PremiumDashboard() {
       if (strengthResult.status === 'fulfilled') {
         const strengthPayload = strengthResult.value.data || {};
         const totalPos = strengthPayload.review_count_analyzed || 0;
-        const mappedStrengths = (strengthPayload.lda_strengths || []).map((item, index) => {
-          const mentions = item.review_count || item.sample_size || item.quotes?.length || 0;
+        const rawStrengths = Array.isArray(strengthPayload.lda_strengths)
+          ? strengthPayload.lda_strengths
+          : [];
+        const mappedStrengths = rawStrengths.map((item, index) => {
+          const quotes = Array.isArray(item.quotes) ? item.quotes.filter(Boolean) : [];
+          const mentions = item.review_count || item.sample_size || quotes.length || 0;
           const denominator = totalPos || item.review_count || 1;
           const baseValue = item.review_percentage || mentions;
           const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
+          const keywords = Array.isArray(item.keywords) ? item.keywords.filter(Boolean) : [];
+          const coherenceScore =
+            typeof item.coherence_score === 'number' ? Math.round(item.coherence_score * 100) / 100 : null;
           return {
-            id: `${appMeta.appId}-strength-${index}`,
+            id: `${insightsAppId}-strength-${index}`,
             title: item.issue,
             mentions,
             percentage: Number.isFinite(percentage) ? percentage : 0,
-            quotes: item.quotes || [],
+            quotes,
+            keywords,
+            coherenceScore,
           };
         });
-        setStrengths(mappedStrengths.slice(0, 3));
+        const cleanedStrengths = mappedStrengths
+          .filter((item) => item.title && (item.mentions > 0 || item.quotes.length > 0))
+          .slice(0, 3);
+        setStrengths(cleanedStrengths);
       } else {
         console.warn('Strength insights unavailable', strengthResult.reason);
         setStrengths([]);
@@ -1242,13 +1253,13 @@ function DashboardTab({ strategicSnapshot,
           title="Top 3 Pain Points"
           accent="danger"
           items={painPoints}
-          emptyMessage="No negative themes detected yet."
+          emptyMessage="No themes discovered."
         />
         <ExpandableCard
           title="Top 3 Strengths"
           accent="primary"
           items={strengths}
-          emptyMessage="No positive themes detected yet."
+          emptyMessage="No themes discovered."
         />
       </section>
     </div>
@@ -1320,6 +1331,23 @@ function ExpandableCard({ title, accent, items, emptyMessage }) {
                   <p className="text-xs text-gray-500 break-words">
                     {item.mentions || 0} mentions - {item.percentage || 0}% of reviews
                   </p>
+                  {typeof item.coherenceScore === 'number' && (
+                    <p className="mt-1 text-[11px] text-gray-400">
+                      Coherence score: {item.coherenceScore}
+                    </p>
+                  )}
+                  {item.keywords?.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {item.keywords.map((keyword) => (
+                        <span
+                          key={`${item.id}-keyword-${keyword}`}
+                          className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600"
+                        >
+                          {keyword}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
               <ChevronDown
@@ -1327,18 +1355,23 @@ function ExpandableCard({ title, accent, items, emptyMessage }) {
               />
             </button>
             {expandedId === item.id && (
-              <div className="mt-4 space-y-3">
-                {(item.quotes || []).map((quote, quoteIndex) => (
-                  <div
-                    key={`${item.id}-quote-${quoteIndex}`}
-                    className={clsx(
-                      'rounded-lg border-l-4 bg-gray-50 px-4 py-3 text-sm italic text-gray-600',
-                      toneStyles.border,
-                    )}
-                  >
-                    "{quote}"
+              <div className="mt-4 space-y-4">
+                {item.quotes?.length > 0 && (
+                  <div className="space-y-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Example quotes</p>
+                    {item.quotes.map((quote, quoteIndex) => (
+                      <div
+                        key={`${item.id}-quote-${quoteIndex}`}
+                        className={clsx(
+                          'rounded-lg border-l-4 bg-gray-50 px-4 py-3 text-sm italic text-gray-600',
+                          toneStyles.border,
+                        )}
+                      >
+                        "{quote}"
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             )}
           </div>
@@ -1465,13 +1498,13 @@ function PainStrengthsTab({ painPoints, strengths }) {
         title="Negative Themes"
         accent="danger"
         items={painPoints}
-        emptyMessage="No negative sentiment detected."
+        emptyMessage="No themes discovered."
       />
       <ExpandableCard
         title="Positive Themes"
         accent="primary"
         items={strengths}
-        emptyMessage="No positive sentiment detected."
+        emptyMessage="No themes discovered."
       />
     </div>
   );
