@@ -436,13 +436,27 @@ function PremiumDashboard() {
           : [];
         const mappedPain = rawPainPoints.map((item, index) => {
           const quotes = Array.isArray(item.quotes) ? item.quotes.filter(Boolean) : [];
-          const mentions = Number(item.review_count ?? item.sample_size ?? 0);
-          const denominator = totalNeg || item.review_count || 1;
-          const baseValue = item.review_percentage || mentions;
-          const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
+          const mentionsRaw =
+            typeof item.mentions === 'number'
+              ? item.mentions
+              : Number(item.review_count ?? item.sample_size ?? quotes.length ?? 0);
+          const mentions = Number.isFinite(mentionsRaw) ? mentionsRaw : 0;
+          const denominator = totalNeg || item.review_count || totalNeg || 1;
+          const baseValue =
+            typeof item.review_percentage === 'number'
+              ? item.review_percentage
+              : mentions;
+          const percentage =
+            typeof item.review_percentage === 'number'
+              ? item.review_percentage
+              : Math.round(((baseValue || 0) / (denominator || 1)) * 1000) / 10;
           const keywords = Array.isArray(item.keywords) ? item.keywords.filter(Boolean) : [];
           const coherenceScore =
             typeof item.coherence_score === 'number' ? Math.round(item.coherence_score * 100) / 100 : null;
+          const averageProbability =
+            typeof item.average_probability === 'number'
+              ? Math.round(item.average_probability * 1000) / 1000
+              : null;
           return {
             id: `${insightsAppId}-pain-${index}`,
             title: item.issue,
@@ -451,6 +465,7 @@ function PremiumDashboard() {
             quotes,
             keywords,
             coherenceScore,
+            averageProbability,
           };
         });
         const cleanedPain = mappedPain
@@ -470,13 +485,27 @@ function PremiumDashboard() {
           : [];
         const mappedStrengths = rawStrengths.map((item, index) => {
           const quotes = Array.isArray(item.quotes) ? item.quotes.filter(Boolean) : [];
-          const mentions = Number(item.review_count ?? item.sample_size ?? 0);
-          const denominator = totalPos || item.review_count || 1;
-          const baseValue = item.review_percentage || mentions;
-          const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
+          const mentionsRaw =
+            typeof item.mentions === 'number'
+              ? item.mentions
+              : Number(item.review_count ?? item.sample_size ?? quotes.length ?? 0);
+          const mentions = Number.isFinite(mentionsRaw) ? mentionsRaw : 0;
+          const denominator = totalPos || item.review_count || totalPos || 1;
+          const baseValue =
+            typeof item.review_percentage === 'number'
+              ? item.review_percentage
+              : mentions;
+          const percentage =
+            typeof item.review_percentage === 'number'
+              ? item.review_percentage
+              : Math.round(((baseValue || 0) / (denominator || 1)) * 1000) / 10;
           const keywords = Array.isArray(item.keywords) ? item.keywords.filter(Boolean) : [];
           const coherenceScore =
             typeof item.coherence_score === 'number' ? Math.round(item.coherence_score * 100) / 100 : null;
+          const averageProbability =
+            typeof item.average_probability === 'number'
+              ? Math.round(item.average_probability * 1000) / 1000
+              : null;
           return {
             id: `${insightsAppId}-strength-${index}`,
             title: item.issue,
@@ -485,6 +514,7 @@ function PremiumDashboard() {
             quotes,
             keywords,
             coherenceScore,
+            averageProbability,
           };
         });
         const cleanedStrengths = mappedStrengths

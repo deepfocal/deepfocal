@@ -23,7 +23,7 @@ from sklearn.decomposition import LatentDirichletAllocation
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 import numpy as np
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from .models import Review
 
 
@@ -171,6 +171,45 @@ class TopicModelingEngine:
             # Assign topic probabilities to reviews
             doc_topic_probs = self.lda_model.transform(tfidf_matrix)
 
+            # Calculate how many reviews primarily map to each topic
+            topic_mentions = Counter()
+            topic_probability_sums = defaultdict(float)
+
+            for prob_vector in doc_topic_probs:
+                if prob_vector.size == 0:
+                    continue
+
+                primary_topic = int(np.argmax(prob_vector))
+                primary_probability = float(prob_vector[primary_topic])
+
+                topic_mentions[primary_topic] += 1
+                topic_probability_sums[primary_topic] += primary_probability
+
+            topic_stats = {}
+            for topic in topics:
+                topic_id = topic['topic_id']
+                mentions = int(topic_mentions.get(topic_id, 0))
+                average_probability = (
+                    topic_probability_sums[topic_id] / mentions
+                    if mentions > 0
+                    else 0.0
+                )
+                mention_percentage = (
+                    round((mentions / usable_review_count) * 100, 1)
+                    if usable_review_count > 0
+                    else 0.0
+                )
+
+                topic['mentions'] = mentions
+                topic['mention_percentage'] = mention_percentage
+                topic['average_probability'] = round(average_probability, 4)
+
+                topic_stats[topic_id] = {
+                    'mentions': mentions,
+                    'mention_percentage': mention_percentage,
+                    'average_probability': round(average_probability, 4),
+                }
+
             # Find representative reviews for each topic
             topic_examples = self._find_representative_reviews(
                 filtered_reviews, doc_topic_probs, review_texts, topics
@@ -180,6 +219,7 @@ class TopicModelingEngine:
                 'topics': topics,
                 'distinct_topics': distinct_topics,
                 'topic_examples': topic_examples,
+                'topic_stats': topic_stats,
                 'review_count': usable_review_count,
                 'raw_review_count': raw_review_count,
                 'usable_review_count': usable_review_count,

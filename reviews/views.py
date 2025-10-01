@@ -37,7 +37,8 @@ def enhanced_insights_summary(request):
     cache_key_data = {
         'endpoint': 'enhanced_insights',
         'app_id': app_id,
-        'timestamp': cache.get(f'last_data_update_{app_id}', 0)
+        'timestamp': cache.get(f'last_data_update_{app_id}', 0),
+        'schema_version': 2,
     }
     cache_key = hashlib.md5(json.dumps(cache_key_data, sort_keys=True).encode()).hexdigest()
 
@@ -63,6 +64,9 @@ def enhanced_insights_summary(request):
                 'issue': topic['label'],
                 'keywords': topic['top_words'][:5],
                 'coherence_score': topic['coherence_score'],
+                'mentions': topic.get('mentions', 0),
+                'review_percentage': topic.get('mention_percentage', 0),
+                'average_probability': topic.get('average_probability', 0.0),
                 'quotes': quotes
             })
 
@@ -77,6 +81,7 @@ def enhanced_insights_summary(request):
         'raw_review_count': raw_review_count,
         'filtered_out_reviews': filtered_out,
         'app_id': app_id,
+        'topic_stats': lda_results.get('topic_stats', {}),
         'cached': False
     }
 

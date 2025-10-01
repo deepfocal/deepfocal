@@ -60,6 +60,9 @@ def strengths_insights(request):
                 "issue": topic.get("label"),
                 "keywords": topic.get("top_words", [])[:5],
                 "coherence_score": topic.get("coherence_score"),
+                "mentions": topic.get("mentions", 0),
+                "review_percentage": topic.get("mention_percentage", 0),
+                "average_probability": topic.get("average_probability", 0.0),
                 "quotes": quotes,
             }
         )
@@ -70,6 +73,7 @@ def strengths_insights(request):
         "raw_review_count": lda_results.get("raw_review_count", lda_results.get("review_count", 0)),
         "filtered_out_reviews": lda_results.get("filtered_out_reviews", 0),
         "app_id": app_id,
+        "topic_stats": lda_results.get("topic_stats", {}),
     }
 
     if lda_results.get("error"):
