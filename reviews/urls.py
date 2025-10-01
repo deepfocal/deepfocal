@@ -3,6 +3,7 @@ from django.urls import path
 from .views import ReviewListView, enhanced_insights_summary, competitor_analysis, strategic_performance, trigger_insights_generation
 from .views import task_status as views_task_status
 from .auth_views import register, login, user_profile, logout
+from .demo_views import demo_dashboard
 from .project_views import (
     create_project,
     list_projects,
@@ -49,6 +50,8 @@ urlpatterns = [
     # Progressive disclosure analysis
     path('analysis/upgrade-to-full/', upgrade_to_full_analysis, name='upgrade-to-full-analysis'),
 
+    # Demo endpoints
+    path('demo/dashboard/', demo_dashboard, name='demo-dashboard'),
     # New dashboard + task-centric API endpoints
     path('projects/<int:project_id>/status/', project_analysis_status, name='project-analysis-status'),
     path('projects/<int:project_id>/strategic-scores/', project_strategic_scores, name='project-strategic-scores'),
@@ -56,4 +59,3 @@ urlpatterns = [
     path('analysis/start/', start_analysis, name='start-analysis'),
     path('tasks/<str:task_id>/detail/', task_status_detail, name='task-status-detail'),
 ]
-

@@ -112,6 +112,13 @@ function PremiumDashboard() {
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [panelMessage, setPanelMessage] = useState('');
+  const [isDemoMode] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    return new URLSearchParams(window.location.search).get('demo') === 'true';
+  });
+  const [demoDataset, setDemoDataset] = useState(null);
   const [deletingProjectId, setDeletingProjectId] = useState(null);
   const { startTask, isTaskRunning, runningTasks } = useTask();
 
@@ -270,9 +277,67 @@ function PremiumDashboard() {
     return () => mediaQuery.removeEventListener('change', handler);
   }, []);
 
-  const activeTasks = statusData?.active_tasks || [];
 
   const loadProjects = async () => {
+    if (isDemoMode) {
+      try {
+        setLoadingProjects(true);
+        setLoadingDashboard(true);
+        const response = await apiClient.get('/api/demo/dashboard/');
+        const {
+          projects = [],
+          user_limits: userLimits = {},
+          status,
+          sentiment,
+          pain_points: demoPainPoints,
+          strengths: demoStrengths,
+          default_project_id: defaultProjectId,
+          default_app_id: defaultAppId,
+        } = response.data || {};
+
+        setDemoDataset(response.data || {});
+        setProjectsState({ projects, userLimits });
+
+        const resolvedProjectId = defaultProjectId ?? projects[0]?.id ?? null;
+        setSelectedProjectId(resolvedProjectId);
+        setSelectedAppKey('home');
+
+        if (status) {
+          setStatusData(status);
+        }
+
+        const resolvedProject =
+          resolvedProjectId != null
+            ? projects.find((project) => project.id === resolvedProjectId)
+            : projects[0] ?? null;
+        const homeAppId = defaultAppId ?? resolvedProject?.home_app_id ?? null;
+        const seriesMap = sentiment?.series || {};
+        if (homeAppId && seriesMap[homeAppId]) {
+          setSentimentSeries(seriesMap[homeAppId]);
+        } else {
+          setSentimentSeries([]);
+        }
+
+        if (homeAppId) {
+          setPainPoints(demoPainPoints?.[homeAppId] || []);
+          setStrengths(demoStrengths?.[homeAppId] || []);
+        } else {
+          setPainPoints([]);
+          setStrengths([]);
+        }
+
+        setPanelMessage('Demo mode: sample data loaded.');
+        return { projects, userLimits };
+      } catch (error) {
+        console.error('Failed to load demo data', error);
+        setPanelMessage('Unable to load demo data. Please refresh.');
+        return null;
+      } finally {
+        setLoadingProjects(false);
+        setLoadingDashboard(false);
+      }
+    }
+
     try {
       setLoadingProjects(true);
       const response = await apiClient.get('/api/projects/');
@@ -301,6 +366,47 @@ function PremiumDashboard() {
   }, []);
 
   const loadProjectAnalytics = async (projectId, appMeta) => {
+    if (isDemoMode) {
+      const dataset = demoDataset;
+      if (!dataset) {
+        return;
+      }
+
+      const resolvedProject =
+        selectedProject ||
+        projectsState.projects.find((project) => project.id === projectId) ||
+        null;
+      const fallbackAppId =
+        appMeta?.appId ||
+        resolvedProject?.home_app_id ||
+        dataset.default_app_id ||
+        null;
+
+      const seriesMap = dataset.sentiment?.series || {};
+      if (fallbackAppId && seriesMap[fallbackAppId]) {
+        setSentimentSeries(seriesMap[fallbackAppId]);
+      } else {
+        setSentimentSeries([]);
+      }
+
+      const painMap = dataset.pain_points || {};
+      const strengthMap = dataset.strengths || {};
+      if (fallbackAppId) {
+        setPainPoints(painMap[fallbackAppId] || []);
+        setStrengths(strengthMap[fallbackAppId] || []);
+      } else {
+        setPainPoints([]);
+        setStrengths([]);
+      }
+
+      if (dataset.status) {
+        setStatusData(dataset.status);
+      }
+
+      setLoadingDashboard(false);
+      return;
+    }
+
     if (!projectId || !appMeta?.appId) {
       return;
     }
@@ -308,7 +414,6 @@ function PremiumDashboard() {
     setLoadingDashboard(true);
     setPainPoints([]);
     setStrengths([]);
-
     try {
       const statusPromise = apiClient.get(`/api/projects/${projectId}/status/`);
       const sentimentPromise = apiClient.get(`/api/projects/${projectId}/sentiment-trends/`, {
@@ -399,6 +504,10 @@ function PremiumDashboard() {
 
   const handleCreateProject = async (event) => {
     event.preventDefault();
+    if (isDemoMode) {
+      setPanelMessage('Demo mode: project creation is disabled.');
+      return;
+    }
     const form = event.target;
     const payload = {
       name: form.name.value.trim(),
@@ -422,6 +531,10 @@ function PremiumDashboard() {
 
   const handleAddCompetitor = async (event) => {
     event.preventDefault();
+    if (isDemoMode) {
+      setPanelMessage('Demo mode: competitor management is disabled.');
+      return;
+    }
     if (!selectedProjectId) {
       return;
     }
@@ -522,6 +635,10 @@ function PremiumDashboard() {
       return;
     }
 
+    if (isDemoMode) {
+      setPanelMessage('Demo mode: competitor management is disabled.');
+      return;
+    }
     const confirmationMessage = 'Remove this competitor from the project? This will also stop future comparisons.';
     if (typeof window !== 'undefined' && !window.confirm(confirmationMessage)) {
       return;
@@ -569,6 +686,10 @@ function PremiumDashboard() {
   };
 
   const handleDeleteProject = async (projectId) => {
+    if (isDemoMode) {
+      setPanelMessage('Demo mode: project management is disabled.');
+      return;
+    }
     const project = projectsState.projects.find((item) => item.id === projectId);
     if (!project) {
       setPanelMessage('Project not found or already removed.');
@@ -611,6 +732,10 @@ function PremiumDashboard() {
   };
 
   const handleStartAnalysis = async (appId, analysisType = 'quick') => {
+    if (isDemoMode) {
+      setPanelMessage('Demo mode: analysis runs are disabled.');
+      return;
+    }
     if (!selectedProjectId || !appId) {
       return;
     }
@@ -755,6 +880,7 @@ function PremiumDashboard() {
           onSelectDateRange={setDateRange}
           isSidebarCollapsed={isSidebarCollapsed}
           onToggleSidebar={toggleSidebar}
+          isDemoMode={isDemoMode}
         />
 
         <div className="mx-auto max-w-7xl px-8 py-6">
@@ -786,6 +912,7 @@ function PremiumDashboard() {
                   statusData={statusData}
                   selectedProject={selectedProject}
                   onStartAnalysis={handleStartAnalysis}
+                  isDemoMode={isDemoMode}
                 />
               )}
 
@@ -806,6 +933,7 @@ function PremiumDashboard() {
                   competitors={competitorsList}
                   onSelectCompetitor={handleSelectExistingCompetitor}
                   onDeleteCompetitor={handleDeleteCompetitor}
+                  isDemoMode={isDemoMode}
                 />
               )}
 
@@ -842,6 +970,7 @@ function GlobalHeader({
   onSelectDateRange,
   isSidebarCollapsed,
   onToggleSidebar,
+  isDemoMode,
 }) {
   const SidebarToggleIcon = isSidebarCollapsed ? ChevronRight : ChevronLeft;
 
@@ -858,6 +987,11 @@ function GlobalHeader({
             >
               <SidebarToggleIcon className="h-4 w-4" />
             </button>
+            {isDemoMode && (
+              <span className="inline-flex items-center rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                Demo Mode
+              </span>
+            )}
             <div>
               <label className="text-xs font-medium text-gray-500">Project</label>
               <div className="relative mt-1">
@@ -1213,7 +1347,7 @@ function ExpandableCard({ title, accent, items, emptyMessage }) {
     </div>
   );
 }
-function CompetitorAnalysisTab({ statusData, selectedProject, onStartAnalysis }) {
+function CompetitorAnalysisTab({ statusData, selectedProject, onStartAnalysis, isDemoMode = false }) {
   const apps = statusData?.competitor_analysis || {};
   const activeTasks = statusData?.active_tasks || [];
 
@@ -1234,6 +1368,9 @@ function CompetitorAnalysisTab({ statusData, selectedProject, onStartAnalysis })
           </div>
         )}
       </header>
+      {isDemoMode && (
+        <p className="text-xs font-medium text-primary">Demo mode uses static insights. Analysis actions are disabled.</p>
+      )}
 
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         <table className="min-w-full divide-y divide-gray-200 text-left">
@@ -1282,6 +1419,8 @@ function CompetitorAnalysisTab({ statusData, selectedProject, onStartAnalysis })
                       type="button"
                       onClick={() => onStartAnalysis(appId, 'quick')}
                       className="inline-flex items-center gap-2 rounded-lg border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary hover:bg-primary/10"
+                      disabled={isDemoMode}
+                      aria-disabled={isDemoMode}
                     >
                       Quick Analysis
                     </button>
@@ -1289,6 +1428,8 @@ function CompetitorAnalysisTab({ statusData, selectedProject, onStartAnalysis })
                       type="button"
                       onClick={() => onStartAnalysis(appId, 'full')}
                       className="inline-flex items-center gap-2 rounded-lg border border-warning/30 px-3 py-1.5 text-xs font-semibold text-warning hover:bg-warning/10"
+                      disabled={isDemoMode}
+                      aria-disabled={isDemoMode}
                     >
                       Full Analysis
                     </button>
@@ -1343,6 +1484,7 @@ function ProjectSettingsTab({
   onSelectProject,
   onDeleteProject,
   deletingProjectId,
+  isDemoMode = false,
   onCreateProject,
   onAddCompetitor,
   competitors = [],
@@ -1372,6 +1514,8 @@ function ProjectSettingsTab({
     competitorLimitValue !== null ? Math.max(competitorLimitValue - competitorCount, 0) : null;
   const tierLabel = (userLimits.subscription_tier || '').replace(/\b\w/g, (char) => char.toUpperCase());
   const upgradeHref = '/pricing';
+  const projectActionsDisabled = projectLimitReached || isDemoMode;
+  const competitorActionsDisabled = competitorLimitReached || isDemoMode;
 
   return (
     <div className="space-y-8">
@@ -1380,6 +1524,11 @@ function ProjectSettingsTab({
         <p className="mt-1 text-sm text-gray-500">
           Projects ({projectLimitLabel}) - Subscription tier: {subscriptionLabel || 'CURRENT'}
         </p>
+        {isDemoMode && (
+          <p className="mt-3 text-xs font-semibold text-primary">
+            Demo mode uses sample data. Project actions are read-only.
+          </p>
+        )}
         {projects.length === 0 ? (
           <p className="mt-4 text-sm text-gray-500">
             No projects yet. Create your first project below to start tracking competitors.
@@ -1437,8 +1586,8 @@ function ProjectSettingsTab({
                       type="button"
                       onClick={() => onDeleteProject?.(project.id)}
                       className="inline-flex items-center gap-2 rounded-lg border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={isDeleting || !onDeleteProject}
-                      aria-disabled={isDeleting || !onDeleteProject}
+                      disabled={isDeleting || !onDeleteProject || isDemoMode}
+                      aria-disabled={isDeleting || !onDeleteProject || isDemoMode}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                       {isDeleting ? 'Deleting...' : 'Delete'}
@@ -1463,7 +1612,7 @@ function ProjectSettingsTab({
             placeholder="Project name"
             className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
             required
-            disabled={projectLimitReached}
+            disabled={projectActionsDisabled}
           />
           <input
             name="home_app_id"
@@ -1471,7 +1620,7 @@ function ProjectSettingsTab({
             placeholder="Your App ID (e.g. com.deepfocal.app)"
             className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
             required
-            disabled={projectLimitReached}
+            disabled={projectActionsDisabled}
           />
           <input
             name="home_app_name"
@@ -1479,23 +1628,27 @@ function ProjectSettingsTab({
             placeholder="Your App Name"
             className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
             required
-            disabled={projectLimitReached}
+            disabled={projectActionsDisabled}
           />
           <div className="md:col-span-3">
             <button
               type="submit"
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-primary/50"
-              disabled={projectLimitReached}
+              disabled={projectActionsDisabled}
             >
               <Plus className="h-4 w-4" /> Create Project
             </button>
           </div>
         </form>
-        {projectLimitReached && (
+        {isDemoMode ? (
+          <p className="mt-3 text-xs font-medium text-primary">
+            Demo mode uses sample data. Project creation is disabled.
+          </p>
+        ) : projectLimitReached ? (
           <p className="mt-3 text-xs font-medium text-warning">
             Project limit reached for your {tierLabel || 'current'} plan. Delete a project or upgrade to add more.
           </p>
-        )}
+        ) : null}
       </section>
 
       {selectedProject && (
@@ -1512,7 +1665,7 @@ function ProjectSettingsTab({
               placeholder="Competitor App ID"
               className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
               required
-              disabled={competitorLimitReached}
+              disabled={competitorActionsDisabled}
             />
             <input
               name="app_name"
@@ -1520,21 +1673,25 @@ function ProjectSettingsTab({
               placeholder="Competitor App Name"
               className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
               required
-              disabled={competitorLimitReached}
+              disabled={competitorActionsDisabled}
             />
             <div className="flex items-center">
               <button
                 type="submit"
                 className="inline-flex items-center gap-2 rounded-lg border border-primary/30 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400 disabled:hover:bg-transparent disabled:opacity-60"
-                disabled={competitorLimitReached}
-                aria-disabled={competitorLimitReached}
+                disabled={competitorActionsDisabled}
+                aria-disabled={competitorActionsDisabled}
               >
                 Add Competitor
               </button>
             </div>
           </form>
 
-          {competitorLimitReached ? (
+          {isDemoMode ? (
+            <p className="mt-3 text-xs font-medium text-primary">
+              Demo mode uses sample data. Competitor management is disabled.
+            </p>
+          ) : competitorLimitReached ? (
             <p className="mt-3 text-xs font-medium text-warning">
               Your {tierLabel || 'current'} plan allows {competitorLimitValue} competitor{competitorLimitValue === 1 ? '' : 's'}. Upgrade to add more.
               {' '}
@@ -1577,6 +1734,8 @@ function ProjectSettingsTab({
                         type="button"
                         onClick={() => onDeleteCompetitor?.(competitor.competitorId, competitor.appId)}
                         className="rounded-lg border border-danger/30 px-3 py-1 text-xs font-semibold text-danger hover:bg-danger/10"
+                        disabled={isDemoMode}
+                        aria-disabled={isDemoMode}
                       >
                         Remove
                       </button>
@@ -1603,3 +1762,4 @@ function ComingSoon({ title }) {
 }
 
 export default PremiumDashboard;
+
