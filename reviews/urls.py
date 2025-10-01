@@ -1,4 +1,4 @@
-﻿# file: reviews/urls.py
+# file: reviews/urls.py
 from django.urls import path
 from .views import ReviewListView, enhanced_insights_summary, competitor_analysis, strategic_performance, trigger_insights_generation
 from .views import task_status as views_task_status
@@ -8,6 +8,7 @@ from .project_views import (
     list_projects,
     add_competitor,
     get_project_details,
+    delete_project,
     delete_competitor,
     task_status,
     upgrade_to_full_analysis,
@@ -39,6 +40,7 @@ urlpatterns = [
     path('projects/create/', create_project, name='create-project'),
     path('projects/<int:project_id>/', get_project_details, name='project-details'),
     path('projects/add-competitor/', add_competitor, name='add-competitor'),
+    path('projects/<int:project_id>/delete/', delete_project, name='delete-project'),
     path('competitors/<int:competitor_id>/delete/', delete_competitor, name='delete-competitor'),
 
     # Background task monitoring
@@ -54,3 +56,4 @@ urlpatterns = [
     path('analysis/start/', start_analysis, name='start-analysis'),
     path('tasks/<str:task_id>/detail/', task_status_detail, name='task-status-detail'),
 ]
+

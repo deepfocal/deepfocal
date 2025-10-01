@@ -17,6 +17,7 @@ import {
   RefreshCw,
   ChevronLeft,
   ChevronRight,
+  Trash2,
 } from 'lucide-react';
 import {
   LineChart,
@@ -111,6 +112,7 @@ function PremiumDashboard() {
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [panelMessage, setPanelMessage] = useState('');
+  const [deletingProjectId, setDeletingProjectId] = useState(null);
   const { startTask, isTaskRunning, runningTasks } = useTask();
 
   const selectedProject = useMemo(
@@ -277,13 +279,18 @@ function PremiumDashboard() {
       const { projects = [], user_limits: userLimits } = response.data || {};
       setProjectsState({ projects, userLimits });
 
-      if (!selectedProjectId && projects.length > 0) {
-        setSelectedProjectId(projects[0].id);
-      }
+      setSelectedProjectId((currentSelection) => {
+        if (currentSelection && projects.some((project) => project.id === currentSelection)) {
+          return currentSelection;
+        }
+        return projects[0]?.id ?? null;
+      });
       setPanelMessage('');
+      return { projects, userLimits };
     } catch (error) {
       console.error('Failed to load projects', error);
       setPanelMessage('Unable to load projects. Please refresh.');
+      return null;
     } finally {
       setLoadingProjects(false);
     }
@@ -561,6 +568,48 @@ function PremiumDashboard() {
     }
   };
 
+  const handleDeleteProject = async (projectId) => {
+    const project = projectsState.projects.find((item) => item.id === projectId);
+    if (!project) {
+      setPanelMessage('Project not found or already removed.');
+      return;
+    }
+
+    const confirmationMessage = `Are you sure you want to delete ${project.name}? This will remove all competitors and data.`;
+    if (typeof window !== 'undefined' && !window.confirm(confirmationMessage)) {
+      return;
+    }
+
+    const wasSelected = selectedProjectId === projectId;
+    setDeletingProjectId(projectId);
+
+    try {
+      await apiClient.delete(`/api/projects/${projectId}/delete/`);
+
+      if (wasSelected) {
+        setStatusData(null);
+        setSentimentSeries([]);
+        setPainPoints([]);
+        setStrengths([]);
+      }
+
+      const result = await loadProjects();
+      if (wasSelected) {
+        setSelectedAppKey('home');
+        if (!result?.projects?.length) {
+          setSelectedProjectId(null);
+        }
+      }
+
+      setPanelMessage(`Project "${project.name}" deleted.`);
+    } catch (error) {
+      console.error('Failed to delete project', error);
+      setPanelMessage(error.response?.data?.error || 'Unable to delete project');
+    } finally {
+      setDeletingProjectId(null);
+    }
+  };
+
   const handleStartAnalysis = async (appId, analysisType = 'quick') => {
     if (!selectedProjectId || !appId) {
       return;
@@ -747,7 +796,11 @@ function PremiumDashboard() {
               {activeTab === 'project-settings' && (
                 <ProjectSettingsTab
                   selectedProject={selectedProject}
+                  selectedProjectId={selectedProjectId}
                   projectsState={projectsState}
+                  onSelectProject={handleProjectChange}
+                  onDeleteProject={handleDeleteProject}
+                  deletingProjectId={deletingProjectId}
                   onCreateProject={handleCreateProject}
                   onAddCompetitor={handleAddCompetitor}
                   competitors={competitorsList}
@@ -1283,82 +1336,225 @@ function PainStrengthsTab({ painPoints, strengths }) {
   );
 }
 
-function ProjectSettingsTab({ selectedProject, projectsState, onCreateProject, onAddCompetitor, competitors = [], onSelectCompetitor, onDeleteCompetitor }) {
+function ProjectSettingsTab({
+  selectedProject,
+  selectedProjectId,
+  projectsState = { projects: [], userLimits: {} },
+  onSelectProject,
+  onDeleteProject,
+  deletingProjectId,
+  onCreateProject,
+  onAddCompetitor,
+  competitors = [],
+  onSelectCompetitor,
+  onDeleteCompetitor,
+}) {
   const userLimits = projectsState.userLimits || {};
+  const projects = projectsState.projects || [];
+  const projectLimitRaw = userLimits.project_limit;
+  const projectLimitValue =
+    projectLimitRaw === null || projectLimitRaw === undefined ? null : Number(projectLimitRaw);
+  const projectLimitLabel =
+    projectLimitValue !== null ? `${projects.length}/${projectLimitValue}` : `${projects.length}/Unlimited`;
+  const projectLimitReached = projectLimitValue !== null && projects.length >= projectLimitValue;
+  const subscriptionLabel = (userLimits.subscription_tier || '').toUpperCase();
+
+  const competitorLimitValueRaw = userLimits.competitor_limit;
+  const competitorLimitValue =
+    competitorLimitValueRaw === null || competitorLimitValueRaw === undefined
+      ? null
+      : Number(competitorLimitValueRaw);
+  const competitorCount = competitors.length;
+  const competitorLimitReached = competitorLimitValue !== null && competitorCount >= competitorLimitValue;
+  const competitorLimitLabel =
+    competitorLimitValue !== null ? `${competitorCount}/${competitorLimitValue}` : `${competitorCount}/Unlimited`;
+  const remainingCompetitors =
+    competitorLimitValue !== null ? Math.max(competitorLimitValue - competitorCount, 0) : null;
+  const tierLabel = (userLimits.subscription_tier || '').replace(/\b\w/g, (char) => char.toUpperCase());
+  const upgradeHref = '/pricing';
 
   return (
     <div className="space-y-8">
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-gray-base">Manage Projects</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          Projects ({projectLimitLabel}) - Subscription tier: {subscriptionLabel || 'CURRENT'}
+        </p>
+        {projects.length === 0 ? (
+          <p className="mt-4 text-sm text-gray-500">
+            No projects yet. Create your first project below to start tracking competitors.
+          </p>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {projects.map((project) => {
+              const isSelected = project.id === selectedProjectId;
+              const isDeleting = deletingProjectId === project.id;
+              const createdDate = project.created_at ? new Date(project.created_at) : null;
+              const createdLabel =
+                createdDate && !Number.isNaN(createdDate.valueOf()) ? createdDate.toLocaleDateString() : null;
+
+              return (
+                <div
+                  key={project.id}
+                  className={clsx(
+                    'flex flex-col gap-3 rounded-lg border border-gray-200 bg-gray-50 p-4 sm:flex-row sm:items-center sm:justify-between',
+                    isSelected && 'border-primary/40 bg-primary/5',
+                  )}
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-gray-base">
+                      {project.name}
+                      {isSelected && <span className="ml-2 text-xs text-primary">Active</span>}
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      Home app: {project.home_app_name}
+                      {' - '}
+                      Competitors: {project.competitors_count ?? 0}
+                      {createdLabel ? (
+                        <>
+                          {' - '}
+                          Created {createdLabel}
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onSelectProject?.(project.id)}
+                      className={clsx(
+                        'inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition',
+                        isSelected
+                          ? 'border-primary bg-primary text-white shadow-sm'
+                          : 'border-primary/30 text-primary hover:bg-primary/10',
+                      )}
+                      disabled={isSelected || Boolean(deletingProjectId) || !onSelectProject}
+                      aria-disabled={isSelected || Boolean(deletingProjectId) || !onSelectProject}
+                    >
+                      {isSelected ? 'Active Project' : 'Switch to Project'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteProject?.(project.id)}
+                      className="inline-flex items-center gap-2 rounded-lg border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isDeleting || !onDeleteProject}
+                      aria-disabled={isDeleting || !onDeleteProject}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {isDeleting ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-gray-base">Create Project</h2>
         <p className="mt-1 text-sm text-gray-500">
-          Projects ({projectsState.projects.length}/{userLimits.project_limit || 1}) - Subscription tier:{' '}
-          {userLimits.subscription_tier?.toUpperCase()}
+          Monitor a new home app and its competitors. Project slots used: {projectLimitLabel}.
         </p>
         <form onSubmit={onCreateProject} className="mt-4 grid gap-4 md:grid-cols-3">
           <input
             name="name"
             type="text"
             placeholder="Project name"
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
             required
+            disabled={projectLimitReached}
           />
           <input
             name="home_app_id"
             type="text"
             placeholder="Your App ID (e.g. com.deepfocal.app)"
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
             required
+            disabled={projectLimitReached}
           />
           <input
             name="home_app_name"
             type="text"
             placeholder="Your App Name"
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
             required
+            disabled={projectLimitReached}
           />
           <div className="md:col-span-3">
             <button
               type="submit"
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90"
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-primary/50"
+              disabled={projectLimitReached}
             >
               <Plus className="h-4 w-4" /> Create Project
             </button>
           </div>
         </form>
+        {projectLimitReached && (
+          <p className="mt-3 text-xs font-medium text-warning">
+            Project limit reached for your {tierLabel || 'current'} plan. Delete a project or upgrade to add more.
+          </p>
+        )}
       </section>
 
       {selectedProject && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-gray-base">Add Competitor</h2>
-          <p className="mt-1 text-sm text-gray-500">Project: {selectedProject.name}</p>
+          <p className="mt-1 text-sm text-gray-500">
+            Project: {selectedProject.name}
+            <span className="ml-2 text-xs text-gray-400">Competitors ({competitorLimitLabel})</span>
+          </p>
           <form onSubmit={onAddCompetitor} className="mt-4 grid gap-4 md:grid-cols-3">
             <input
               name="app_id"
               type="text"
               placeholder="Competitor App ID"
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
               required
+              disabled={competitorLimitReached}
             />
             <input
               name="app_name"
               type="text"
               placeholder="Competitor App Name"
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
               required
+              disabled={competitorLimitReached}
             />
             <div className="flex items-center">
               <button
                 type="submit"
-                className="inline-flex items-center gap-2 rounded-lg border border-primary/30 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/10"
+                className="inline-flex items-center gap-2 rounded-lg border border-primary/30 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400 disabled:hover:bg-transparent disabled:opacity-60"
+                disabled={competitorLimitReached}
+                aria-disabled={competitorLimitReached}
               >
                 Add Competitor
               </button>
             </div>
           </form>
 
+          {competitorLimitReached ? (
+            <p className="mt-3 text-xs font-medium text-warning">
+              Your {tierLabel || 'current'} plan allows {competitorLimitValue} competitor{competitorLimitValue === 1 ? '' : 's'}. Upgrade to add more.
+              {' '}
+              <a href={upgradeHref} className="text-primary underline hover:text-primary/80">
+                Upgrade plan
+              </a>
+            </p>
+          ) : (
+            competitorLimitValue !== null && remainingCompetitors !== null && (
+              <p className="mt-3 text-xs text-gray-500">
+                You can add {remainingCompetitors} more competitor{remainingCompetitors === 1 ? '' : 's'} on your plan.
+              </p>
+            )
+          )}
+
           {competitors.length > 0 && (
             <div className="mt-6 space-y-3">
-              <h3 className="text-sm font-semibold text-gray-base">Existing Competitors</h3>
+              <h3 className="text-sm font-semibold text-gray-base">
+                Existing Competitors ({competitorLimitLabel})
+              </h3>
               <div className="grid gap-3 sm:grid-cols-2">
                 {competitors.map((competitor) => (
                   <div
@@ -1407,26 +1603,3 @@ function ComingSoon({ title }) {
 }
 
 export default PremiumDashboard;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

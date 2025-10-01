@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db import transaction
-from .models import Project, CompetitorApp, UserProfile
+from .models import Project, CompetitorApp, UserProfile, Review, SentimentSnapshot, TaskTracker
 from .tasks import import_google_play_reviews_for_user, import_google_play_reviews_full_analysis
 from celery.result import AsyncResult
 
@@ -92,7 +92,7 @@ def list_projects(request):
 
     projects_data = []
     for project in projects:
-        competitors_count = 0
+        competitors_count = project.competitors.count()
         projects_data.append({
             'id': project.id,
             'name': project.name,
@@ -111,7 +111,8 @@ def list_projects(request):
             'project_limit': profile.get_project_limit(),
             'review_collection_limit': profile.get_review_collection_limit(),
             'subscription_tier': profile.subscription_tier,
-            'unlimited_dashboard_access': True
+            'unlimited_dashboard_access': True,
+            'competitor_limit': profile.get_competitor_limit(),
         }
     })
 
@@ -217,6 +218,39 @@ def get_project_details(request, project_id):
         'competitors': competitors_data
     })
 
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_project(request, project_id):
+    """
+    Delete a project and cascade associated competitor data for the authenticated user.
+    """
+    try:
+        project = Project.objects.get(id=project_id, user=request.user)
+    except Project.DoesNotExist:
+        return Response({
+            'error': 'Project not found or you do not have permission to delete it'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    app_ids = [project.home_app_id]
+    app_ids.extend(project.competitors.values_list('app_id', flat=True))
+    app_ids = [app_id for app_id in app_ids if app_id]
+
+    with transaction.atomic():
+        if app_ids:
+            Review.objects.filter(app_id__in=app_ids).delete()
+            SentimentSnapshot.objects.filter(app_id__in=app_ids).delete()
+        TaskTracker.objects.filter(project=project).delete()
+        project.delete()
+
+    remaining_projects = Project.objects.filter(user=request.user).count()
+
+    return Response({
+        'message': 'Project deleted successfully',
+        'deleted_project_id': project_id,
+        'remaining_projects': remaining_projects,
+        'removed_app_ids': app_ids,
+    }, status=status.HTTP_200_OK)
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
