@@ -392,7 +392,8 @@ function PremiumDashboard() {
       return;
     }
 
-    if (!projectId || !appMeta?.appId) {
+    const effectiveAppId = appMeta?.appId || selectedAppKey || selectedProject?.home_app_id;
+    if (!projectId || !effectiveAppId) {
       return;
     }
 
@@ -403,9 +404,9 @@ function PremiumDashboard() {
       const statusPromise = apiClient.get(`/api/projects/${projectId}/status/`);
       const sentimentPromise = apiClient.get(`/api/projects/${projectId}/sentiment-trends/`, {
         params: {
-          app_id: appMeta.appId,
+          app_id: effectiveAppId,
           date_range: dateRange,
-          ...(appMeta.compareTo ? { compare_to: appMeta.compareTo } : {}),
+          ...(appMeta?.compareTo ? { compare_to: appMeta.compareTo } : {}),
         },
       });
 
@@ -416,7 +417,7 @@ function PremiumDashboard() {
       setPanelMessage('');
       setLoadingDashboard(false);
 
-      const insightsAppId = appMeta.appId || 'com.clickup.app';
+      const insightsAppId = effectiveAppId || 'com.clickup.app';
 
       const [painResult, strengthResult] = await Promise.allSettled([
         apiClient.get('/api/enhanced-insights/', {
@@ -435,7 +436,7 @@ function PremiumDashboard() {
           : [];
         const mappedPain = rawPainPoints.map((item, index) => {
           const quotes = Array.isArray(item.quotes) ? item.quotes.filter(Boolean) : [];
-          const mentions = item.review_count || item.sample_size || quotes.length || 0;
+          const mentions = Number(item.review_count ?? item.sample_size ?? 0);
           const denominator = totalNeg || item.review_count || 1;
           const baseValue = item.review_percentage || mentions;
           const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
@@ -453,7 +454,7 @@ function PremiumDashboard() {
           };
         });
         const cleanedPain = mappedPain
-          .filter((item) => item.title && (item.mentions > 0 || item.quotes.length > 0))
+          .filter((item) => Boolean(item.title))
           .slice(0, 3);
         setPainPoints(cleanedPain);
       } else {
@@ -469,7 +470,7 @@ function PremiumDashboard() {
           : [];
         const mappedStrengths = rawStrengths.map((item, index) => {
           const quotes = Array.isArray(item.quotes) ? item.quotes.filter(Boolean) : [];
-          const mentions = item.review_count || item.sample_size || quotes.length || 0;
+          const mentions = Number(item.review_count ?? item.sample_size ?? 0);
           const denominator = totalPos || item.review_count || 1;
           const baseValue = item.review_percentage || mentions;
           const percentage = Math.round(((baseValue || 0) / denominator) * 1000) / 10;
@@ -487,7 +488,7 @@ function PremiumDashboard() {
           };
         });
         const cleanedStrengths = mappedStrengths
-          .filter((item) => item.title && (item.mentions > 0 || item.quotes.length > 0))
+          .filter((item) => Boolean(item.title))
           .slice(0, 3);
         setStrengths(cleanedStrengths);
       } else {
