@@ -72,6 +72,16 @@ class UserProfile(models.Model):
         }
         return limits.get(self.subscription_tier, 500)
 
+    def get_competitor_limit(self):
+        """Get how many competitor apps the user can track per project for this tier."""
+        limits = {
+            'free': 1,
+            'starter': 3,
+            'pro': 5,
+            'enterprise': None  # Enterprise tier has no enforced limit
+        }
+        return limits.get(self.subscription_tier, 1)
+
 
 class Project(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
