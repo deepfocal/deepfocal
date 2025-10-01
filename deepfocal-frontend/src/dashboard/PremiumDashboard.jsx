@@ -1,6 +1,6 @@
 import { useTask } from '../contexts/TaskContext';
 import LoadingOverlay from '../components/LoadingOverlay';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   LayoutDashboard,
   BarChart3,
@@ -94,7 +94,21 @@ function PremiumDashboard() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [projectsState, setProjectsState] = useState(initialProjectState);
   const [selectedProjectId, setSelectedProjectId] = useState(null);
-  const [selectedAppKey, setSelectedAppKey] = useState('home');
+
+  const getInitialSelectedAppKey = () => {
+    if (typeof window === 'undefined') {
+      return 'home';
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get('app') || 'home';
+  };
+
+  const initialAppKeyRef = useRef(null);
+  if (initialAppKeyRef.current === null) {
+    initialAppKeyRef.current = getInitialSelectedAppKey();
+  }
+
+  const [selectedAppKey, setSelectedAppKeyInternal] = useState(initialAppKeyRef.current);
   const [dateRange, setDateRange] = useState('30d');
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
@@ -103,6 +117,27 @@ function PremiumDashboard() {
     }
     return getStoredSidebarPref();
   });
+
+  const setSelectedAppKey = useCallback(
+    (nextKey, options = {}) => {
+      const resolvedKey = nextKey || 'home';
+      setSelectedAppKeyInternal(resolvedKey);
+
+      if (options.skipUrl || typeof window === 'undefined') {
+        return;
+      }
+
+      const url = new URL(window.location.href);
+      if (!resolvedKey || resolvedKey === 'home') {
+        url.searchParams.delete('app');
+      } else {
+        url.searchParams.set('app', resolvedKey);
+      }
+
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    },
+    [setSelectedAppKeyInternal],
+  );
 
   const [statusData, setStatusData] = useState(null);
   const [sentimentSeries, setSentimentSeries] = useState([]);
@@ -154,6 +189,22 @@ function PremiumDashboard() {
 
     return apps;
   }, [selectedProject, statusData]);
+
+  useEffect(() => {
+    if (!Array.isArray(appOptions) || appOptions.length === 0) {
+      return;
+    }
+
+    const isValidSelection = appOptions.some((option) => option.key === selectedAppKey);
+    if (isValidSelection) {
+      return;
+    }
+
+    const fallbackOption = appOptions.find((option) => option.key === 'home') || appOptions[0];
+    if (fallbackOption) {
+      setSelectedAppKey(fallbackOption.key);
+    }
+  }, [appOptions, selectedAppKey, setSelectedAppKey]);
 
   const selectedAppMeta = useMemo(() => {
     if (!selectedProject) {
@@ -277,6 +328,21 @@ function PremiumDashboard() {
     return () => mediaQuery.removeEventListener('change', handler);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const nextApp = params.get('app') || 'home';
+      setSelectedAppKey(nextApp, { skipUrl: true });
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [setSelectedAppKey]);
+
 
   const loadProjects = async () => {
     if (isDemoMode) {
@@ -298,7 +364,6 @@ function PremiumDashboard() {
 
         const resolvedProjectId = defaultProjectId ?? projects[0]?.id ?? null;
         setSelectedProjectId(resolvedProjectId);
-        setSelectedAppKey('home');
 
         if (status) {
           setStatusData(status);
@@ -441,7 +506,7 @@ function PremiumDashboard() {
               ? item.mentions
               : Number(item.review_count ?? item.sample_size ?? quotes.length ?? 0);
           const mentions = Number.isFinite(mentionsRaw) ? mentionsRaw : 0;
-          const denominator = totalNeg || item.review_count || totalNeg || 1;
+          const denominator = totalNeg || item.review_count || 1;
           const baseValue =
             typeof item.review_percentage === 'number'
               ? item.review_percentage
@@ -490,7 +555,7 @@ function PremiumDashboard() {
               ? item.mentions
               : Number(item.review_count ?? item.sample_size ?? quotes.length ?? 0);
           const mentions = Number.isFinite(mentionsRaw) ? mentionsRaw : 0;
-          const denominator = totalPos || item.review_count || totalPos || 1;
+          const denominator = totalPos || item.review_count || 1;
           const baseValue =
             typeof item.review_percentage === 'number'
               ? item.review_percentage
