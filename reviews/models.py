@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 
 class Review(models.Model):
@@ -16,26 +17,12 @@ class Review(models.Model):
     content = models.TextField()
     sentiment_score = models.FloatField(null=True, blank=True,
                                         help_text="Sentiment score from -1 (negative) to 1 (positive)")
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
 
     def __str__(self):
         return f"{self.source} - {self.title}"
 
 
-class SentimentSnapshot(models.Model):
-    app_id = models.CharField(max_length=255)
-    date = models.DateField()
-    positive_percentage = models.FloatField()
-    negative_percentage = models.FloatField()
-    neutral_percentage = models.FloatField()
-    total_reviews_analyzed = models.IntegerField()
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        unique_together = ['app_id', 'date']  # One snapshot per app per day
-
-    def __str__(self):
-        return f"{self.app_id} - {self.date}"
 
 # Add these new models:
 

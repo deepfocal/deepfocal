@@ -112,6 +112,12 @@ def build_sentiment_trend(
         _sentiment_series(compare_app_id, since) if compare_app_id else None
     )
 
+    if not home_series:
+        home_series = _sentiment_series(app_id, None)
+
+    if compare_app_id and competitor_series is not None and not competitor_series:
+        competitor_series = _sentiment_series(compare_app_id, None)
+
     buckets: Dict[str, SentimentBucket] = {}
 
     for bucket in home_series:
@@ -156,16 +162,28 @@ def _sentiment_series(app_id: Optional[str], since) -> List[Dict[str, float]]:
     if not app_id:
         return []
 
-    queryset = Review.objects.filter(
-        app_id=app_id,
-        created_at__gte=since,
-        sentiment_score__isnull=False,
-    )
+    filters = {
+        'app_id': app_id,
+        'sentiment_score__isnull': False,
+    }
+
+    if since is not None:
+        filters['created_at__gte'] = since
+
+    queryset = Review.objects.filter(**filters)
 
     if not queryset.exists():
-        return []
+        if since is None:
+            return []
+        queryset = Review.objects.filter(
+            app_id=app_id,
+            sentiment_score__isnull=False,
+        )
+        if not queryset.exists():
+            return []
+        since = queryset.order_by('created_at').first().created_at
 
-    horizon = timezone.now() - since
+    horizon = timezone.now() - since if since else timedelta.max
     truncate = TruncDay("created_at") if horizon <= timedelta(days=30) else TruncWeek("created_at")
 
     aggregated = (

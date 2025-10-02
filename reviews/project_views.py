@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db import transaction
-from .models import Project, CompetitorApp, UserProfile, Review, SentimentSnapshot, TaskTracker
+from .models import Project, CompetitorApp, UserProfile, Review, TaskTracker
 from .tasks import import_google_play_reviews_for_user, import_google_play_reviews_full_analysis
 from celery.result import AsyncResult
 
@@ -239,7 +239,6 @@ def delete_project(request, project_id):
     with transaction.atomic():
         if app_ids:
             Review.objects.filter(app_id__in=app_ids).delete()
-            SentimentSnapshot.objects.filter(app_id__in=app_ids).delete()
         TaskTracker.objects.filter(project=project).delete()
         project.delete()
 

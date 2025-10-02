@@ -1,7 +1,6 @@
 # deepfocal_backend/settings_local.py
 import os
 from .settings import *
-from celery.schedules import crontab
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -88,13 +87,7 @@ CORS_ALLOWED_ORIGINS = [
 
 CORS_ALLOW_CREDENTIALS = True
 
-CELERY_BEAT_SCHEDULE = {
-    'run-weekly-updates-sunday-2am': {
-        'task': 'reviews.tasks.run_weekly_updates', # <-- Points to our new master task
-        'schedule': crontab(hour=2, minute=0, day_of_week=0), # Runs every Sunday at 2 AM
-    },
-}
-
+# No scheduled tasks; sentiment aggregates compute directly from reviews
 
 CELERY_TASK_ALWAYS_EAGER = False
 CELERY_WORKER_POOL = 'solo'
