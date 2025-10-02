@@ -11,6 +11,10 @@ class Review(models.Model):
                               help_text="The app store ID this review belongs to")
     review_id = models.CharField(max_length=255, unique=True)
     source = models.CharField(max_length=100)  # e.g., 'Apple App Store', 'Google Play Store'
+    counts_toward_score = models.BooleanField(
+        default=True,
+        help_text="Whether this review counts toward sentiment metrics (True for app stores, False for social mentions)"
+    )
     author = models.CharField(max_length=255, null=True, blank=True)
     rating = models.IntegerField()
     title = models.CharField(max_length=255)
@@ -74,6 +78,12 @@ class Project(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     name = models.CharField(max_length=200)
     home_app_id = models.CharField(max_length=255)
+    apple_app_id = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text="Apple App Store numeric ID (e.g., 389801252)"
+    )
     home_app_name = models.CharField(max_length=200)
     created_at = models.DateTimeField(auto_now_add=True)
     home_app_last_refreshed = models.DateTimeField(null=True, blank=True,
@@ -104,6 +114,12 @@ class Project(models.Model):
 class CompetitorApp(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='competitors')
     app_id = models.CharField(max_length=255)
+    apple_app_id = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text="Apple App Store numeric ID (e.g., 389801252)"
+    )
     app_name = models.CharField(max_length=200)
     added_at = models.DateTimeField(auto_now_add=True)
     last_refreshed = models.DateTimeField(null=True, blank=True,
@@ -185,4 +201,3 @@ class TaskTracker(models.Model):
 
     class Meta:
         ordering = ['-created_at']
-
