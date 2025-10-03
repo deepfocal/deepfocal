@@ -414,18 +414,11 @@ def import_web_mentions(app_name, max_results=30):
     retry_backoff=True,
     retry_backoff_max=300
 )
-def import_reddit_mentions(app_name, subreddits=None, max_posts_per_sub=25):
-    """Import Reddit posts and comments as supplementary review data."""
+def import_reddit_mentions(app_name, max_results=100):
+    """Import relevant Reddit posts and comments as supplementary review data."""
     if not app_name:
         logger.warning('import_reddit_mentions called without app_name')
         return 'No app name provided.'
-
-    if not subreddits:
-        logger.warning('import_reddit_mentions called without subreddit list')
-        return 'No subreddits provided.'
-
-    if isinstance(subreddits, str):
-        subreddits = [subreddits]
 
     headers = {'User-Agent': 'Deepfocal/1.0'}
     sentiment_pipeline = pipeline(
@@ -458,121 +451,134 @@ def import_reddit_mentions(app_name, subreddits=None, max_posts_per_sub=25):
         except Exception:
             return timezone.now()
 
-    for subreddit in subreddits:
-        url = f'https://www.reddit.com/r/{subreddit}.json'
-        params = {'limit': max_posts_per_sub}
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=15)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:
-            logger.error('Failed to fetch subreddit %s: %s', subreddit, exc)
+    search_params = {
+        'q': app_name,
+        'sort': 'relevance',
+        'limit': max_results,
+        't': 'year',
+        'restrict_sr': False,
+    }
+
+    try:
+        response = requests.get('https://www.reddit.com/search.json', headers=headers, params=search_params, timeout=15)
+        response.raise_for_status()
+        search_payload = response.json()
+    except Exception as exc:
+        logger.error('Failed to search Reddit for %s: %s', app_name, exc)
+        return f'Reddit search failed: {exc}'
+
+    posts = search_payload.get('data', {}).get('children', [])
+    normalized_app = app_name.lower()
+
+    for post_wrapper in posts:
+        if post_wrapper.get('kind') != 't3':
             continue
 
-        posts = payload.get('data', {}).get('children', [])
-        for post_wrapper in posts:
-            if post_wrapper.get('kind') != 't3':
+        post = post_wrapper.get('data', {})
+        title = (post.get('title') or '').strip()
+        body = (post.get('selftext') or '').strip()
+        content_parts = [part for part in [title, body] if part]
+        if not content_parts:
+            continue
+
+        content = '\n\n'.join(content_parts)
+        if normalized_app not in content.lower():
+            continue
+
+        sentiment = _sentiment_score(content)
+
+        permalink = post.get('permalink') or ''
+        review_id = f'https://www.reddit.com{permalink}' if permalink else f"reddit:post:{post.get('id')}"
+        created_at = _timestamp_from_utc(post.get('created_utc'))
+
+        defaults = {
+            'author': post.get('author') or '',
+            'title': title,
+            'content': content,
+            'rating': 3,
+            'source': 'Reddit',
+            'sentiment_score': sentiment,
+            'app_id': app_name,
+            'counts_toward_score': False,
+            'created_at': created_at,
+        }
+
+        _, created = Review.objects.update_or_create(
+            review_id=review_id,
+            defaults=defaults
+        )
+        total_posts += 1
+        if created:
+            new_mentions += 1
+        else:
+            updated_mentions += 1
+
+        if not permalink:
+            continue
+
+        comments_url = f'https://www.reddit.com{permalink}.json'
+        comment_params = {'limit': 3, 'depth': 1, 'sort': 'top'}
+        try:
+            comments_response = requests.get(
+                comments_url,
+                headers=headers,
+                params=comment_params,
+                timeout=15
+            )
+            comments_response.raise_for_status()
+            comments_payload = comments_response.json()
+        except Exception as exc:
+            logger.error('Failed to fetch comments for %s: %s', review_id, exc)
+            continue
+
+        if not isinstance(comments_payload, list) or len(comments_payload) < 2:
+            continue
+
+        comments_data = comments_payload[1].get('data', {}).get('children', [])
+        processed_comments = 0
+        for comment_wrapper in comments_data:
+            if comment_wrapper.get('kind') != 't1':
                 continue
 
-            post = post_wrapper.get('data', {})
-            title = (post.get('title') or '').strip()
-            body = (post.get('selftext') or '').strip()
-            content_parts = [part for part in [title, body] if part]
-            if not content_parts:
+            comment = comment_wrapper.get('data', {})
+            body_text = (comment.get('body') or '').strip()
+            if not body_text:
                 continue
 
-            content = '\n\n'.join(content_parts)
-            sentiment = _sentiment_score(content)
+            if normalized_app not in body_text.lower():
+                continue
 
-            permalink = post.get('permalink') or ''
-            review_id = f'https://www.reddit.com{permalink}' if permalink else f"reddit:post:{post.get('id')}"
-            created_at = _timestamp_from_utc(post.get('created_utc'))
+            comment_permalink = comment.get('permalink') or ''
+            comment_review_id = (
+                f'https://www.reddit.com{comment_permalink}'
+                if comment_permalink else f"reddit:comment:{comment.get('id')}"
+            )
 
-            defaults = {
-                'author': post.get('author') or '',
-                'title': title,
-                'content': content,
+            comment_defaults = {
+                'author': comment.get('author') or '',
+                'title': f"Comment on {title}" if title else 'Reddit comment',
+                'content': body_text,
                 'rating': 3,
                 'source': 'Reddit',
-                'sentiment_score': sentiment,
+                'sentiment_score': _sentiment_score(body_text),
                 'app_id': app_name,
                 'counts_toward_score': False,
-                'created_at': created_at,
+                'created_at': _timestamp_from_utc(comment.get('created_utc')),
             }
 
-            _, created = Review.objects.update_or_create(
-                review_id=review_id,
-                defaults=defaults
+            _, comment_created = Review.objects.update_or_create(
+                review_id=comment_review_id,
+                defaults=comment_defaults
             )
-            total_posts += 1
-            if created:
+            total_comments += 1
+            if comment_created:
                 new_mentions += 1
             else:
                 updated_mentions += 1
 
-            if not permalink:
-                continue
-
-            comments_url = f'https://www.reddit.com{permalink}.json'
-            comment_params = {'limit': 3, 'depth': 1, 'sort': 'top'}
-            try:
-                comments_response = requests.get(
-                    comments_url,
-                    headers=headers,
-                    params=comment_params,
-                    timeout=15
-                )
-                comments_response.raise_for_status()
-                comments_payload = comments_response.json()
-            except Exception as exc:
-                logger.error('Failed to fetch comments for %s: %s', review_id, exc)
-                continue
-
-            if not isinstance(comments_payload, list) or len(comments_payload) < 2:
-                continue
-
-            comments_data = comments_payload[1].get('data', {}).get('children', [])
-            processed_comments = 0
-            for comment_wrapper in comments_data:
-                if comment_wrapper.get('kind') != 't1':
-                    continue
-
-                comment = comment_wrapper.get('data', {})
-                body_text = (comment.get('body') or '').strip()
-                if not body_text:
-                    continue
-
-                comment_permalink = comment.get('permalink') or ''
-                comment_review_id = (
-                    f'https://www.reddit.com{comment_permalink}'
-                    if comment_permalink else f"reddit:comment:{comment.get('id')}"
-                )
-
-                comment_defaults = {
-                    'author': comment.get('author') or '',
-                    'title': f"Comment on {title}" if title else 'Reddit comment',
-                    'content': body_text,
-                    'rating': 3,
-                    'source': 'Reddit',
-                    'sentiment_score': _sentiment_score(body_text),
-                    'app_id': app_name,
-                    'counts_toward_score': False,
-                    'created_at': _timestamp_from_utc(comment.get('created_utc')),
-                }
-
-                _, comment_created = Review.objects.update_or_create(
-                    review_id=comment_review_id,
-                    defaults=comment_defaults
-                )
-                total_comments += 1
-                if comment_created:
-                    new_mentions += 1
-                else:
-                    updated_mentions += 1
-
-                processed_comments += 1
-                if processed_comments >= 3:
-                    break
+            processed_comments += 1
+            if processed_comments >= 3:
+                break
 
     summary = (
         f"Reddit import complete for {app_name}. Posts processed: {total_posts}. "

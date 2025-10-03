@@ -31,6 +31,7 @@ import {
 import clsx from 'clsx';
 import apiClient from '../apiClient';
 import { useAuth } from '../AuthContext';
+import MarketMentionsSection from './MarketMentionsSection';
 
 const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, value));
 
@@ -1362,6 +1363,10 @@ function DashboardTab({ strategicSnapshot,
           items={strengths}
           emptyMessage="No themes discovered."
         />
+      </section>
+
+      <section className="mt-8">
+        <MarketMentionsSection appId={selectedAppMeta?.appId} />
       </section>
     </div>
   );
