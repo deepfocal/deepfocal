@@ -1,4 +1,5 @@
-﻿import React from 'react';
+import React from 'react';
+import { Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
 import { TaskProvider } from './contexts/TaskContext'; // Add this import
 import LoginForm from './LoginForm';
@@ -37,9 +38,12 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <Routes>
+        <Route path='/*' element={<AppContent />} />
+      </Routes>
     </AuthProvider>
   );
 }
 
 export default App;
+

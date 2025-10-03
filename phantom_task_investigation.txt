@@ -1,0 +1,21 @@
+Call Chain
+- deepfocal_backend/urls.py: includes reviews.urls, exposing /api/projects/<project_id>/status/
+- reviews/urls.py: maps status endpoint to reviews/task_views.py:project_analysis_status
+- reviews/task_views.py: project_analysis_status constructs the JSON returned to the dashboard
+
+Where Task Data Is Built Or Persisted
+- reviews/task_views.py: project_analysis_status queries TaskTracker, builds active_tasks array and review_import block per app
+- reviews/tasks.py: collect_reviews_task ensures a TaskTracker row exists for every Celery job, recreating it if missing
+- reviews/tasks.py: import_google_play_reviews_for_user creates a TaskTracker record immediately when a task is fired
+- reviews/project_views.py / reviews/task_views.py: endpoints that start imports, indirectly creating TaskTracker rows
+- reviews/views.py: trigger_insights_generation caches task ids short-term; check_background_tasks inspects Celery workers
+
+Why Empty TaskTracker Still Produces Task Data
+- Celery message for task eea4c396-de82-4ff9-a81e-36e4689c0fa4 remains in the broker.
+- When the worker handles that message, collect_reviews_task recreates the TaskTracker row with status "started".
+- project_analysis_status sees that resurrected row and reports it as active, regardless of prior DB cleanup or revocation.
+
+Recommended Fix
+- In project_analysis_status, consult AsyncResult for each tracker. If Celery state is no longer pending/started/progress, mark the tracker revoked and skip it.
+- Add a cleanup job or revocation hook that updates TaskTracker status immediately when a task is cancelled, so stale ids never surface.
+- Optional: periodic sweep to mark aged trackers without live Celery state as revoked.

@@ -31,6 +31,7 @@ import {
 import clsx from 'clsx';
 import apiClient from '../apiClient';
 import { useAuth } from '../AuthContext';
+import { useLocation, useNavigate } from 'react-router-dom';
 import MarketMentionsSection from './MarketMentionsSection';
 
 const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, value));
@@ -92,7 +93,51 @@ const initialProjectState = { projects: [], userLimits: null };
 function PremiumDashboard() {
   const { user } = useAuth();
 
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  const resolveSectionFromPath = useCallback((path) => {
+    const normalizedPath = path || '/';
+    if (normalizedPath === '/' || normalizedPath === '') {
+      return 'dashboard';
+    }
+    if (normalizedPath.includes('competitor-analysis')) return 'competitor-analysis';
+    if (normalizedPath.includes('market-mentions')) return 'market-mentions';
+    if (normalizedPath.includes('pain-points')) return 'pain-points';
+    if (normalizedPath.includes('project-settings')) return 'project-settings';
+    if (normalizedPath.includes('review-explorer')) return 'review-explorer';
+    if (normalizedPath.includes('collections')) return 'collections';
+    if (normalizedPath.includes('alerts')) return 'alerts';
+    if (normalizedPath.includes('dashboard')) return 'dashboard';
+    return 'dashboard';
+  }, []);
+
+  const currentSection = useMemo(
+    () => resolveSectionFromPath(location.pathname),
+    [location.pathname, resolveSectionFromPath],
+  );
+
+  const buildPathForSection = useCallback((sectionId) => {
+    if (sectionId === 'dashboard') {
+      return '/';
+    }
+    return '/' + sectionId;
+  }, []);
+
+  const handleSectionNavigation = useCallback(
+    (sectionId) => {
+      const targetPath = buildPathForSection(sectionId);
+      const suffix = (location.search ?? '') + (location.hash ?? '');
+      const currentFullPath = (location.pathname ?? '') + (location.search ?? '') + (location.hash ?? '');
+      const nextFullPath = targetPath + suffix;
+
+      if (nextFullPath !== currentFullPath) {
+        navigate(nextFullPath);
+      }
+    },
+    [buildPathForSection, location.hash, location.pathname, location.search, navigate],
+  );
+
   const [projectsState, setProjectsState] = useState(initialProjectState);
   const [selectedProjectId, setSelectedProjectId] = useState(null);
 
@@ -950,13 +995,13 @@ function PremiumDashboard() {
               <div className="mt-3 space-y-1">
                 {group.items.map((item) => {
                   const Icon = item.icon;
-                  const isActive = activeTab === item.id;
+                  const isActive = currentSection === item.id;
                   return (
                     <button
                       key={item.id}
                       type="button"
                       title={isSidebarCollapsed ? item.label : undefined}
-                      onClick={() => setActiveTab(item.id)}
+                      onClick={() => handleSectionNavigation(item.id)}
                       className={clsx(
                         'group flex w-full items-center rounded-lg py-2 text-sm font-medium transition-colors duration-200',
                         isActive
@@ -1009,7 +1054,7 @@ function PremiumDashboard() {
             </div>
           ) : (
             <section>
-              {activeTab === 'dashboard' && (
+              {currentSection === 'dashboard' && (
                 <DashboardTab
                   strategicSnapshot={strategicSnapshot}
                   sentimentSeries={sentimentSeries}
@@ -1020,7 +1065,7 @@ function PremiumDashboard() {
                 />
               )}
 
-              {activeTab === 'competitor-analysis' && (
+              {currentSection === 'competitor-analysis' && (
                 <CompetitorAnalysisTab
                   statusData={statusData}
                   selectedProject={selectedProject}
@@ -1029,11 +1074,15 @@ function PremiumDashboard() {
                 />
               )}
 
-              {activeTab === 'pain-points' && (
+              {currentSection === 'pain-points' && (
                 <PainStrengthsTab painPoints={painPoints} strengths={strengths} />
               )}
 
-              {activeTab === 'project-settings' && (
+              {currentSection === 'market-mentions' && (
+                <MarketMentionsSection appId={selectedAppMeta?.appId} />
+              )}
+
+              {currentSection === 'project-settings' && (
                 <ProjectSettingsTab
                   selectedProject={selectedProject}
                   selectedProjectId={selectedProjectId}
@@ -1050,8 +1099,8 @@ function PremiumDashboard() {
                 />
               )}
 
-              {['review-explorer', 'collections', 'alerts'].includes(activeTab) && (
-                <ComingSoon title={navigationItems.flatMap((group) => group.items).find((item) => item.id === activeTab)?.label || 'Coming Soon'} />
+              {['review-explorer', 'collections', 'alerts'].includes(currentSection) && (
+                <ComingSoon title={navigationItems.flatMap((group) => group.items).find((item) => item.id === currentSection)?.label || 'Coming Soon'} />
               )}
             </section>
           )}
@@ -1917,4 +1966,5 @@ function ComingSoon({ title }) {
 }
 
 export default PremiumDashboard;
+
 
