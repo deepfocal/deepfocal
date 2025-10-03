@@ -4,71 +4,82 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from .models import TaskTracker, Project, CompetitorApp, UserProfile, Review
+from .app_id_utils import expand_many_app_ids
 from .tasks import import_google_play_reviews_for_user
-from django.db.models import Q
+from django.db.models import Q, Count, Avg
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def project_analysis_status(request, project_id):
-    """
-    Get current analysis status for a project using TaskTracker.
-    This replaces the complex competitor_analysis endpoint.
-    """
+    """Get current analysis status for a project using TaskTracker."""
     try:
         project = Project.objects.get(id=project_id, user=request.user)
     except Project.DoesNotExist:
-        return Response({
-            'error': 'Project not found'
-        }, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': 'Project not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    # Get user profile for limits and all app IDs for this project
     profile = UserProfile.objects.get_or_create(user=request.user)[0]
     review_limit = profile.get_review_collection_limit()
 
-    # Get all app IDs for this project
     competitors = list(CompetitorApp.objects.filter(project=project))
-    competitor_map = {comp.app_id: comp for comp in competitors}
 
-    app_ids = list(dict.fromkeys([project.home_app_id, *competitor_map.keys()]))
+    entries = []
+    home_app_ids = expand_many_app_ids([project.home_app_id, project.apple_app_id])
+    entries.append({
+        'key': project.home_app_id,
+        'name': project.home_app_name,
+        'type': 'home',
+        'app_ids': home_app_ids,
+        'competitor': None,
+    })
 
-    # Get current tasks for these apps
+    for competitor in competitors:
+        competitor_ids = expand_many_app_ids([competitor.app_id, competitor.apple_app_id])
+        entries.append({
+            'key': competitor.app_id,
+            'name': competitor.app_name,
+            'type': 'competitor',
+            'app_ids': competitor_ids,
+            'competitor': competitor,
+        })
+
+    task_app_ids = {identifier for entry in entries for identifier in entry['app_ids']}
+
     active_tasks = list(TaskTracker.objects.filter(
-        app_id__in=app_ids,
+        app_id__in=task_app_ids,
         user=request.user,
-        status__in=['pending', 'started', 'progress']
+        status__in=['pending', 'started', 'progress'],
     ).order_by('-created_at'))
 
     latest_task_by_app = {}
     for task in active_tasks:
-        # Queryset is ordered newest-first; preserve the first task we see per app
         latest_task_by_app.setdefault(task.app_id, task)
 
-    # Get review data for each app
     apps_data = {}
     task_data = []
 
-    for app_id in app_ids:
-        # Get app info
-        competitor_obj = None
-        if app_id == project.home_app_id:
-            app_name = project.home_app_name
-            app_type = "home"
-        else:
-            competitor_obj = competitor_map.get(app_id)
-            app_name = competitor_obj.app_name if competitor_obj else app_id
-            app_type = "competitor"
+    for entry in entries:
+        app_ids = entry['app_ids']
+        stats = Review.objects.filter(
+            app_id__in=app_ids,
+            sentiment_score__isnull=False,
+            counts_toward_score=True,
+        ).aggregate(
+            total=Count('id'),
+            positive=Count('id', filter=Q(sentiment_score__gt=0.1)),
+            negative=Count('id', filter=Q(sentiment_score__lt=-0.1)),
+            avg_sentiment=Avg('sentiment_score'),
+        )
 
-        # Get review stats
-        app_reviews = Review.objects.filter(app_id=app_id, sentiment_score__isnull=False)
-        total = app_reviews.count()
-        positive = app_reviews.filter(sentiment_score__gt=0.1).count()
-        negative = app_reviews.filter(sentiment_score__lt=-0.1).count()
-        neutral = total - positive - negative
+        total = stats['total'] or 0
+        positive = stats['positive'] or 0
+        negative = stats['negative'] or 0
+        neutral = max(total - positive - negative, 0)
 
+        competitor_obj = entry['competitor']
         app_payload = {
-            'app_name': app_name,
-            'app_type': app_type,
+            'app_name': entry['name'],
+            'app_type': entry['type'],
             'competitor_id': competitor_obj.id if competitor_obj else None,
             'added_at': competitor_obj.added_at.isoformat() if competitor_obj else None,
             'total_reviews': total,
@@ -81,31 +92,33 @@ def project_analysis_status(request, project_id):
             'review_limit': review_limit,
             'remaining_reviews': max(review_limit - total, 0),
             'can_collect_more': total < review_limit,
+            'combined_app_ids': app_ids,
         }
-        apps_data[app_id] = app_payload
 
-        # Check for active tasks for this app
-        app_task = latest_task_by_app.get(app_id)
-        if app_task:
-            app_payload['status'] = app_task.status
+        task_candidates = [latest_task_by_app[identifier] for identifier in app_ids if identifier in latest_task_by_app]
+        if task_candidates:
+            task = max(task_candidates, key=lambda item: item.created_at)
+            app_payload['status'] = task.status
             app_payload['review_import'] = {
-                'status': app_task.status,
-                'task_id': app_task.task_id,
-                'progress_percent': app_task.progress_percent,
+                'status': task.status,
+                'task_id': task.task_id,
+                'progress_percent': task.progress_percent,
             }
             task_data.append({
-                'task_id': app_task.task_id,
-                'app_id': app_id,
-                'app_name': app_name,
-                'task_type': app_task.task_type,
-                'status': app_task.status,
-                'current_reviews': app_task.current_reviews,
-                'target_reviews': app_task.target_reviews,
-                'progress_percent': app_task.progress_percent,
-                'created_at': app_task.created_at,
+                'task_id': task.task_id,
+                'app_id': task.app_id,
+                'app_name': entry['name'],
+                'task_type': task.task_type,
+                'status': task.status,
+                'current_reviews': task.current_reviews,
+                'target_reviews': task.target_reviews,
+                'progress_percent': task.progress_percent,
+                'created_at': task.created_at,
             })
         else:
             app_payload['status'] = 'idle' if total > 0 else 'pending'
+
+        apps_data[entry['key']] = app_payload
 
     return Response({
         'project_info': {
@@ -117,12 +130,10 @@ def project_analysis_status(request, project_id):
         'competitor_analysis': apps_data,
         'active_tasks': task_data,
         'has_active_tasks': len(task_data) > 0,
-        'message': f"Found {len(task_data)} active tasks" if task_data else "No active tasks",
+        'message': f"Found {len(task_data)} active tasks" if task_data else 'No active tasks',
         'review_limit': review_limit,
         'subscription_tier': profile.subscription_tier,
     })
-
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def start_analysis(request):

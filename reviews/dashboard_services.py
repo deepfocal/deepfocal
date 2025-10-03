@@ -1,4 +1,4 @@
-﻿"""Dashboard analytics helpers for premium UI."""
+"""Dashboard analytics helpers for premium UI."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,6 +10,7 @@ from django.db.models.functions import TruncDay, TruncWeek
 from django.utils import timezone
 
 from .models import CompetitorApp, Project, Review
+from .app_id_utils import expand_app_ids, expand_many_app_ids
 
 
 @dataclass
@@ -24,12 +25,35 @@ def _bounded(value: float, lower: float = 0.0, upper: float = 100.0) -> float:
     return max(lower, min(upper, value))
 
 
+def _project_home_ids(project: Project) -> List[str]:
+    return [app_id for app_id in {project.home_app_id, project.apple_app_id} if app_id]
+
+
+def _competitor_app_ids(project: Project, identifier: str | None) -> List[str]:
+    if not identifier:
+        return []
+    competitor = project.competitors.filter(
+        Q(app_id=identifier) | Q(apple_app_id=identifier)
+    ).first()
+    if competitor:
+        return [app_id for app_id in {competitor.app_id, competitor.apple_app_id} if app_id]
+    return expand_app_ids(identifier)
+
+
 def calculate_strategic_scores(project: Project) -> Dict[str, float]:
     """Derive MVP strategic metrics from review sentiment data."""
-    home_stats = _aggregate_sentiment_metrics([project.home_app_id])
-    competitor_ids = list(
-        CompetitorApp.objects.filter(project=project).values_list("app_id", flat=True)
-    )
+    home_ids = _project_home_ids(project)
+    home_stats = _aggregate_sentiment_metrics(home_ids)
+
+    competitor_records = list(CompetitorApp.objects.filter(project=project).only(
+        "app_id", "apple_app_id"
+    ))
+    competitor_ids: List[str] = []
+    for competitor in competitor_records:
+        if competitor.app_id:
+            competitor_ids.append(competitor.app_id)
+        if competitor.apple_app_id:
+            competitor_ids.append(competitor.apple_app_id)
     competitor_stats = _aggregate_sentiment_metrics(competitor_ids) if competitor_ids else None
 
     positive_pct = home_stats.get("positive_percentage", 0.0)
@@ -58,10 +82,9 @@ def calculate_strategic_scores(project: Project) -> Dict[str, float]:
         },
     }
 
-
 def _aggregate_sentiment_metrics(app_ids: Iterable[str]) -> Dict[str, float]:
-    app_ids = [app_id for app_id in app_ids if app_id]
-    if not app_ids:
+    expanded_ids = expand_many_app_ids(app_ids)
+    if not expanded_ids:
         return {
             "total_reviews": 0,
             "positive_percentage": 0.0,
@@ -69,7 +92,11 @@ def _aggregate_sentiment_metrics(app_ids: Iterable[str]) -> Dict[str, float]:
             "avg_sentiment": 0.0,
         }
 
-    queryset = Review.objects.filter(app_id__in=app_ids, sentiment_score__isnull=False)
+    queryset = Review.objects.filter(
+        app_id__in=expanded_ids,
+        sentiment_score__isnull=False,
+        counts_toward_score=True,
+    )
     aggregated = queryset.aggregate(
         total=Count("id"),
         positive=Count("id", filter=Q(sentiment_score__gt=0.1)),
@@ -96,7 +123,6 @@ def _aggregate_sentiment_metrics(app_ids: Iterable[str]) -> Dict[str, float]:
         "avg_sentiment": round(aggregated.get("avg_sentiment") or 0.0, 4),
     }
 
-
 def build_sentiment_trend(
     project: Project,
     app_id: str,
@@ -107,16 +133,24 @@ def build_sentiment_trend(
     horizon = _infer_horizon(date_range)
     since = timezone.now() - horizon
 
-    home_series = _sentiment_series(app_id, since)
-    competitor_series = (
-        _sentiment_series(compare_app_id, since) if compare_app_id else None
-    )
+    home_ids = _project_home_ids(project)
+    if app_id in home_ids or app_id == project.apple_app_id:
+        target_home_ids = home_ids
+    else:
+        target_home_ids = expand_app_ids(app_id)
+    home_series = _sentiment_series(target_home_ids, since)
+
+    competitor_series = None
+    competitor_ids: List[str] = []
+    if compare_app_id:
+        competitor_ids = _competitor_app_ids(project, compare_app_id)
+        competitor_series = _sentiment_series(competitor_ids, since)
 
     if not home_series:
-        home_series = _sentiment_series(app_id, None)
+        home_series = _sentiment_series(target_home_ids, None)
 
     if compare_app_id and competitor_series is not None and not competitor_series:
-        competitor_series = _sentiment_series(compare_app_id, None)
+        competitor_series = _sentiment_series(competitor_ids, None)
 
     buckets: Dict[str, SentimentBucket] = {}
 
@@ -147,6 +181,7 @@ def build_sentiment_trend(
     ]
 
 
+
 def _infer_horizon(date_range: str) -> timedelta:
     mapping = {
         "7d": timedelta(days=7),
@@ -158,13 +193,16 @@ def _infer_horizon(date_range: str) -> timedelta:
     return mapping.get(date_range, timedelta(days=30))
 
 
-def _sentiment_series(app_id: Optional[str], since) -> List[Dict[str, float]]:
-    if not app_id:
+def _sentiment_series(app_ids: Iterable[str], since) -> List[Dict[str, float]]:
+    app_ids = [app_id for app_id in set(app_ids) if app_id]
+    if not app_ids:
         return []
 
     filters = {
-        'app_id': app_id,
+        'app_id__in': app_ids,
         'sentiment_score__isnull': False,
+        'counts_toward_score': True,
+        'source': 'Google Play',
     }
 
     if since is not None:
@@ -176,8 +214,10 @@ def _sentiment_series(app_id: Optional[str], since) -> List[Dict[str, float]]:
         if since is None:
             return []
         queryset = Review.objects.filter(
-            app_id=app_id,
+            app_id__in=app_ids,
             sentiment_score__isnull=False,
+            counts_toward_score=True,
+            source='Google Play',
         )
         if not queryset.exists():
             return []
@@ -209,3 +249,4 @@ def _sentiment_series(app_id: Optional[str], since) -> List[Dict[str, float]]:
             }
         )
     return results
+

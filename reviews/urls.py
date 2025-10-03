@@ -1,6 +1,14 @@
 # file: reviews/urls.py
 from django.urls import path
-from .views import ReviewListView, enhanced_insights_summary, competitor_analysis, strategic_performance, trigger_insights_generation
+
+from .views import (
+    ReviewListView,
+    enhanced_insights_summary,
+    competitor_analysis,
+    strategic_performance,
+    trigger_insights_generation,
+    market_mentions,
+)
 from .views import task_status as views_task_status
 from .auth_views import register, login, user_profile, logout
 from .demo_views import demo_dashboard
@@ -54,6 +62,7 @@ urlpatterns = [
     path('demo/dashboard/', demo_dashboard, name='demo-dashboard'),
     # New dashboard + task-centric API endpoints
     path('projects/<int:project_id>/status/', project_analysis_status, name='project-analysis-status'),
+    path('market-mentions/', market_mentions, name='market-mentions'),
     path('projects/<int:project_id>/strategic-scores/', project_strategic_scores, name='project-strategic-scores'),
     path('projects/<int:project_id>/sentiment-trends/', project_sentiment_trends, name='project-sentiment-trends'),
     path('analysis/start/', start_analysis, name='start-analysis'),

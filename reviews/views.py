@@ -8,6 +8,7 @@ from django.db.models import Q, Count, Avg
 from .models import Review, Project, CompetitorApp, UserProfile
 from .serializers import ReviewSerializer
 from .topic_modeling import analyze_app_topics
+from .app_id_utils import expand_app_ids, expand_many_app_ids, get_reviews_for_app_id
 from .tasks import import_google_play_reviews_for_user
 from celery.result import AsyncResult
 from datetime import datetime, timezone
@@ -33,11 +34,18 @@ def enhanced_insights_summary(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
+    related_app_ids = expand_app_ids(app_id)
+    if not related_app_ids:
+        related_app_ids = [app_id]
+
+    last_update = max((cache.get(f'last_data_update_{identifier}', 0) for identifier in related_app_ids), default=0)
+
     # Create cache key for this specific app's insights
     cache_key_data = {
         'endpoint': 'enhanced_insights',
         'app_id': app_id,
-        'timestamp': cache.get(f'last_data_update_{app_id}', 0),
+        'app_ids': related_app_ids,
+        'timestamp': last_update,
         'schema_version': 2,
     }
     cache_key = hashlib.md5(json.dumps(cache_key_data, sort_keys=True).encode()).hexdigest()
@@ -82,6 +90,7 @@ def enhanced_insights_summary(request):
         'filtered_out_reviews': filtered_out,
         'app_id': app_id,
         'topic_stats': lda_results.get('topic_stats', {}),
+        'combined_app_ids': related_app_ids,
         'cached': False
     }
 
@@ -89,6 +98,35 @@ def enhanced_insights_summary(request):
     cache.set(f"enhanced_insights_{cache_key}", result, 3600)
 
     return Response(result)
+
+
+
+
+@api_view(['GET'])
+def market_mentions(request):
+    """Return voice-of-the-market signals from non-store sources (web, Reddit, etc.)."""
+    app_id = request.query_params.get('app_id')
+    if not app_id:
+        return Response({'error': "The 'app_id' query parameter is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    review_qs = get_reviews_for_app_id(app_id).filter(counts_toward_score=False).order_by('-created_at')
+
+    mentions = [
+        {
+            'content': review.content,
+            'sentiment_score': review.sentiment_score,
+            'source': review.source,
+            'created_at': review.created_at,
+            'title': review.title,
+            'url': review.review_id,
+        }
+        for review in review_qs
+    ]
+
+    return Response({
+        'market_mentions': mentions,
+        'total_count': len(mentions),
+    })
 
 
 @api_view(['GET'])
@@ -234,7 +272,8 @@ def strategic_performance(request):
         return Response(cached_result)
 
     # Get app's sentiment stats
-    app_reviews = Review.objects.filter(app_id=app_id, sentiment_score__isnull=False)
+    target_app_ids = expand_app_ids(app_id)
+    app_reviews = Review.objects.filter(app_id__in=target_app_ids, sentiment_score__isnull=False, counts_toward_score=True)
     if not app_reviews.exists():
         return Response({'error': 'No reviews found for this app'}, status=404)
 
@@ -246,18 +285,21 @@ def strategic_performance(request):
     )
 
     # Get competitor apps for comparison
-    competitors = CompetitorApp.objects.filter(project=project)
-    competitor_app_ids = [comp.app_id for comp in competitors]
-    if project.home_app_id != app_id:
-        competitor_app_ids.append(project.home_app_id)
-    else:
-        competitor_app_ids = [comp.app_id for comp in competitors]
+    competitors = list(CompetitorApp.objects.filter(project=project))
+    competitor_app_ids = []
+    for comp in competitors:
+        competitor_app_ids.extend(expand_many_app_ids([comp.app_id, comp.apple_app_id]))
 
-    # Get market averages from competitors in this project
+    if project.home_app_id != app_id:
+        competitor_app_ids.extend(expand_app_ids(project.home_app_id))
+
+    competitor_app_ids = [identifier for identifier in competitor_app_ids if identifier]
+
     if competitor_app_ids:
         market_stats = Review.objects.filter(
             app_id__in=competitor_app_ids,
-            sentiment_score__isnull=False
+            sentiment_score__isnull=False,
+            counts_toward_score=True
         ).aggregate(
             avg_sentiment=Avg('sentiment_score'),
             total=Count('id')
@@ -281,7 +323,8 @@ def strategic_performance(request):
     if competitor_app_ids:
         better_performers = Review.objects.filter(
             app_id__in=competitor_app_ids,
-            sentiment_score__isnull=False
+            sentiment_score__isnull=False,
+            counts_toward_score=True
         ).values('app_id').annotate(
             avg_sent=Avg('sentiment_score')
         ).filter(avg_sent__gt=app_sentiment).count()

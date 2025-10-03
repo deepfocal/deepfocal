@@ -25,6 +25,7 @@ import numpy as np
 import re
 from collections import Counter, defaultdict
 from .models import Review
+from .app_id_utils import expand_app_ids
 
 
 class TopicModelingEngine:
@@ -566,7 +567,8 @@ def analyze_app_topics(app_id, sentiment_filter=None):
         dict: Topic analysis results
     """
     # Get reviews for the app
-    reviews = Review.objects.filter(app_id=app_id)
+    app_ids = expand_app_ids(app_id)
+    reviews = Review.objects.filter(app_id__in=app_ids, counts_toward_score=True)
 
     if not reviews.exists():
         return {
@@ -583,6 +585,7 @@ def analyze_app_topics(app_id, sentiment_filter=None):
 
     # Add app context
     results['app_id'] = app_id
+    results['app_ids'] = app_ids
     results['total_reviews'] = reviews.count()
 
     return results

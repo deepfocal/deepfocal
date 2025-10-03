@@ -626,6 +626,11 @@ function PremiumDashboard() {
       return;
     }
 
+    const appleAppId = form.apple_app_id?.value.trim();
+    if (appleAppId) {
+      payload.apple_app_id = appleAppId;
+    }
+
     try {
       await apiClient.post('/api/projects/create/', payload);
       form.reset();
@@ -1759,6 +1764,22 @@ function ProjectSettingsTab({
             required
             disabled={projectActionsDisabled}
           />
+          <div className="md:col-span-3 flex flex-col gap-1">
+            <label htmlFor="apple_app_id" className="text-sm font-semibold text-gray-base">
+              Apple App Store ID (optional)
+            </label>
+            <input
+              id="apple_app_id"
+              name="apple_app_id"
+              type="text"
+              placeholder="e.g., 1033231837"
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:bg-gray-100"
+              disabled={projectActionsDisabled}
+            />
+            <p className="text-xs text-gray-500">
+              Find in App Store URL: apps.apple.com/us/app/name/[ID]
+            </p>
+          </div>
           <div className="md:col-span-3">
             <button
               type="submit"

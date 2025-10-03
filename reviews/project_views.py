@@ -4,8 +4,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db import transaction
 from .models import Project, CompetitorApp, UserProfile, Review, TaskTracker
-from .tasks import import_google_play_reviews_for_user, import_google_play_reviews_full_analysis
+from .tasks import (
+    import_google_play_reviews_for_user,
+    import_google_play_reviews_full_analysis,
+    import_apple_app_store_reviews,
+)
 from celery.result import AsyncResult
+
 
 
 @api_view(['POST'])
@@ -17,6 +22,12 @@ def create_project(request):
     name = request.data.get('name')
     home_app_id = request.data.get('home_app_id')
     home_app_name = request.data.get('home_app_name')
+    apple_app_id = request.data.get('apple_app_id')
+
+    if isinstance(apple_app_id, str):
+        apple_app_id = apple_app_id.strip()
+        if not apple_app_id:
+            apple_app_id = None
 
     if not all([name, home_app_id, home_app_name]):
         return Response({
@@ -43,12 +54,16 @@ def create_project(request):
         user=request.user,
         name=name,
         home_app_id=home_app_id,
-        home_app_name=home_app_name
+        home_app_name=home_app_name,
+        apple_app_id=apple_app_id
     )
 
     # Update user profile projects count
     profile.projects_created += 1
     profile.save()
+
+    google_task_id = None
+    google_import_status = "pending"
 
     # Automatically trigger review import for the home app with subscription limits
     try:
@@ -59,27 +74,55 @@ def create_project(request):
             app_name=home_app_name,
             project_id=project.id
         )
-        task_id = task_result.id
-        import_status = "started"
-    except Exception as e:
-        # Don't fail project creation if review import fails
-        task_id = None
-        import_status = "failed"
-        print(f"Failed to start review import for home app {home_app_id}: {e}")
+        google_task_id = task_result.id
+        google_import_status = "started"
+    except Exception as exc:
+        google_import_status = "failed"
+        print(f"Failed to start review import for home app {home_app_id}: {exc}")
 
-    return Response({
+    apple_import_data = None
+    if apple_app_id:
+        apple_import_status = "pending"
+        apple_task_id = None
+        try:
+            apple_task = import_apple_app_store_reviews.delay(
+                app_id=apple_app_id,
+                user_id=request.user.id,
+                subscription_tier=profile.subscription_tier,
+                app_name=home_app_name,
+                project_id=project.id
+            )
+            apple_task_id = apple_task.id
+            apple_import_status = "started"
+        except Exception as exc:
+            apple_import_status = "failed"
+            print(f"Failed to start Apple review import for {apple_app_id}: {exc}")
+
+        apple_import_data = {
+            'status': apple_import_status,
+            'task_id': apple_task_id,
+            'message': f'Apple review import {apple_import_status} for {home_app_name}'
+        }
+
+    response_payload = {
         'id': project.id,
         'name': project.name,
         'home_app_id': project.home_app_id,
         'home_app_name': project.home_app_name,
+        'apple_app_id': project.apple_app_id,
         'created_at': project.created_at,
         'competitors_count': 0,
         'home_app_import': {
-            'status': import_status,
-            'task_id': task_id,
-            'message': f'Review import {import_status} for {home_app_name}'
+            'status': google_import_status,
+            'task_id': google_task_id,
+            'message': f'Review import {google_import_status} for {home_app_name}'
         }
-    }, status=status.HTTP_201_CREATED)
+    }
+
+    if apple_import_data:
+        response_payload['apple_app_import'] = apple_import_data
+
+    return Response(response_payload, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
@@ -98,6 +141,7 @@ def list_projects(request):
             'name': project.name,
             'home_app_id': project.home_app_id,
             'home_app_name': project.home_app_name,
+            'apple_app_id': project.apple_app_id,
             'created_at': project.created_at,
             'competitors_count': competitors_count
         })
@@ -117,6 +161,7 @@ def list_projects(request):
     })
 
 
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def add_competitor(request):
@@ -126,6 +171,12 @@ def add_competitor(request):
     project_id = request.data.get('project_id')
     app_id = request.data.get('app_id')
     app_name = request.data.get('app_name')
+    apple_app_id = request.data.get('apple_app_id')
+
+    if isinstance(apple_app_id, str):
+        apple_app_id = apple_app_id.strip()
+        if not apple_app_id:
+            apple_app_id = None
 
     if not all([project_id, app_id, app_name]):
         return Response({
@@ -141,6 +192,7 @@ def add_competitor(request):
         }, status=status.HTTP_404_NOT_FOUND)
 
     # Note: No longer limiting competitor count, usage-based limits apply to analysis requests
+    profile = UserProfile.objects.get_or_create(user=request.user)[0]
 
     # Check if competitor already exists in this project
     if CompetitorApp.objects.filter(project=project, app_id=app_id).exists():
@@ -148,17 +200,25 @@ def add_competitor(request):
             'error': 'This app is already a competitor in this project'
         }, status=status.HTTP_400_BAD_REQUEST)
 
+    if apple_app_id and CompetitorApp.objects.filter(project=project, apple_app_id=apple_app_id).exists():
+        return Response({
+            'error': 'This Apple app is already a competitor in this project'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
     # Create the competitor
     competitor = CompetitorApp.objects.create(
         project=project,
         app_id=app_id,
+        apple_app_id=apple_app_id,
         app_name=app_name
     )
 
+    google_task_id = None
+    google_import_status = "pending"
+
     # Automatically trigger review import for the new competitor with subscription limits
     try:
-        # Get user profile for subscription tier
-        profile = UserProfile.objects.get_or_create(user=request.user)[0]
+        # Trigger Google Play review import for this competitor
         task_result = import_google_play_reviews_for_user(
             app_id=app_id,
             user_id=request.user.id,
@@ -166,26 +226,55 @@ def add_competitor(request):
             app_name=app_name,
             project_id=project.id
         )
-        task_id = task_result.id
-        import_status = "started"
-    except Exception as e:
+        google_task_id = task_result.id
+        google_import_status = "started"
+    except Exception as exc:
         # Don't fail competitor creation if review import fails
-        task_id = None
-        import_status = "failed"
-        print(f"Failed to start review import for {app_id}: {e}")
+        google_import_status = "failed"
+        print(f"Failed to start review import for {app_id}: {exc}")
 
-    return Response({
+    apple_import_data = None
+    if apple_app_id:
+        apple_import_status = "pending"
+        apple_task_id = None
+        try:
+            apple_task = import_apple_app_store_reviews.delay(
+                app_id=apple_app_id,
+                user_id=request.user.id,
+                subscription_tier=profile.subscription_tier,
+                app_name=app_name,
+                project_id=project.id
+            )
+            apple_task_id = apple_task.id
+            apple_import_status = "started"
+        except Exception as exc:
+            apple_import_status = "failed"
+            print(f"Failed to start Apple review import for {apple_app_id}: {exc}")
+
+        apple_import_data = {
+            'status': apple_import_status,
+            'task_id': apple_task_id,
+            'message': f'Apple review import {apple_import_status} for {app_name}'
+        }
+
+    response_payload = {
         'id': competitor.id,
         'app_id': competitor.app_id,
+        'apple_app_id': competitor.apple_app_id,
         'app_name': competitor.app_name,
         'project_id': project.id,
         'added_at': competitor.added_at,
         'review_import': {
-            'status': import_status,
-            'task_id': task_id,
-            'message': f'Review import {import_status} for {app_name}'
+            'status': google_import_status,
+            'task_id': google_task_id,
+            'message': f'Review import {google_import_status} for {app_name}'
         }
-    }, status=status.HTTP_201_CREATED)
+    }
+
+    if apple_import_data:
+        response_payload['apple_review_import'] = apple_import_data
+
+    return Response(response_payload, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
@@ -205,6 +294,7 @@ def get_project_details(request, project_id):
     competitors_data = [{
         'id': comp.id,
         'app_id': comp.app_id,
+        'apple_app_id': comp.apple_app_id,
         'app_name': comp.app_name,
         'added_at': comp.added_at
     } for comp in competitors]
@@ -233,7 +323,10 @@ def delete_project(request, project_id):
         }, status=status.HTTP_404_NOT_FOUND)
 
     app_ids = [project.home_app_id]
+    if project.apple_app_id:
+        app_ids.append(project.apple_app_id)
     app_ids.extend(project.competitors.values_list('app_id', flat=True))
+    app_ids.extend(project.competitors.values_list('apple_app_id', flat=True))
     app_ids = [app_id for app_id in app_ids if app_id]
 
     with transaction.atomic():
