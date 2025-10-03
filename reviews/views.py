@@ -17,10 +17,25 @@ import hashlib
 
 
 class ReviewListView(generics.ListAPIView):
-    queryset = Review.objects.all().order_by('-created_at')  # Get all reviews, newest first
+    permission_classes = [IsAuthenticated]
     serializer_class = ReviewSerializer
 
+    def get_queryset(self):
+        user = self.request.user
+        projects = Project.objects.filter(user=user).prefetch_related('competitors')
+        app_ids = set()
+        for project in projects:
+            home_ids = expand_many_app_ids([project.home_app_id, project.apple_app_id])
+            app_ids.update(home_ids)
+            for competitor in project.competitors.all():
+                competitor_ids = expand_many_app_ids([competitor.app_id, competitor.apple_app_id])
+                app_ids.update(competitor_ids)
+        if not app_ids:
+            return Review.objects.none()
+        return Review.objects.filter(app_id__in=app_ids).order_by('-created_at')
 
+
+@permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def enhanced_insights_summary(request):
     """
@@ -102,6 +117,7 @@ def enhanced_insights_summary(request):
 
 
 
+@permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def market_mentions(request):
     """Return voice-of-the-market signals from non-store sources (web, Reddit, etc.)."""
@@ -394,6 +410,7 @@ def trigger_insights_generation(request):
     })
 
 
+@permission_classes([IsAuthenticated])
 @api_view(['GET'])
 def task_status(request, task_id):
     """

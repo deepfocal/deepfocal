@@ -322,17 +322,9 @@ def delete_project(request, project_id):
             'error': 'Project not found or you do not have permission to delete it'
         }, status=status.HTTP_404_NOT_FOUND)
 
-    app_ids = [project.home_app_id]
-    if project.apple_app_id:
-        app_ids.append(project.apple_app_id)
-    app_ids.extend(project.competitors.values_list('app_id', flat=True))
-    app_ids.extend(project.competitors.values_list('apple_app_id', flat=True))
-    app_ids = [app_id for app_id in app_ids if app_id]
-
     with transaction.atomic():
-        if app_ids:
-            Review.objects.filter(app_id__in=app_ids).delete()
-        TaskTracker.objects.filter(project=project).delete()
+        project.tasktracker_set.all().delete()
+        project.competitors.all().delete()
         project.delete()
 
     remaining_projects = Project.objects.filter(user=request.user).count()
@@ -341,7 +333,6 @@ def delete_project(request, project_id):
         'message': 'Project deleted successfully',
         'deleted_project_id': project_id,
         'remaining_projects': remaining_projects,
-        'removed_app_ids': app_ids,
     }, status=status.HTTP_200_OK)
 
 @api_view(['DELETE'])

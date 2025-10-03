@@ -1,0 +1,175 @@
+1. File: deepfocal_backend/settings.py:6
+   Category: Security
+   Severity: Critical
+   Issue: SECRET_KEY is hard-coded in source control, leaving production cryptographic secrets exposed if this file is deployed as-is.
+   Recommendation: Load SECRET_KEY from environment or a secrets manager (and rotate any deployed keys); keep only placeholder values in version control.
+
+2. File: deepfocal_backend/settings.py:7
+   Category: Security
+   Severity: High
+   Issue: DEBUG defaults to True in the committed settings module, which would expose detailed stack traces and sensitive data if the base settings are ever used outside dev.
+   Recommendation: Default DEBUG to False and rely on environment variables for enabling it locally.
+
+3. File: deepfocal_backend/settings.py:102-108
+   Category: Security
+   Severity: Critical
+   Issue: The base REST_FRAMEWORK config omits DEFAULT_AUTHENTICATION_CLASSES and DEFAULT_PERMISSION_CLASSES, so any environment that loads this module runs all DRF views anonymously.
+   Recommendation: Mirror the secure defaults from settings_local.py (TokenAuthentication + IsAuthenticated) in the base settings and override only when loosening access intentionally.
+
+4. File: deepfocal_backend/settings.py:61-67
+   Category: Security
+   Severity: Medium
+   Issue: Database credentials (NAME/USER/PASSWORD) are embedded in the base settings, encouraging hard-coded secrets.
+   Recommendation: Read database settings from environment variables with safe defaults for dev only.
+
+5. File: deepfocal_backend/settings.py:86-91
+   Category: Security
+   Severity: Medium
+   Issue: Celery broker/result URLs include a hard-coded IP address, exposing infrastructure details and blocking per-environment configuration.
+   Recommendation: Source Celery connection strings from environment variables.
+
+6. File: deepfocal_backend/settings_local.py:12
+   Category: Security
+   Severity: Medium
+   Issue: DEBUG defaults to True when the env var is absent, risking accidental debug deployment.
+   Recommendation: Default to False and require explicit opt-in via environment variable.
+
+7. File: reviews/topic_modeling.py:12-19
+   Category: Configuration
+   Severity: High
+   Issue: The module forces DJANGO_SETTINGS_MODULE to deepfocal_backend.settings_local on import, breaking alternate environments and overriding caller intent.
+   Recommendation: Remove the hard-coded override; rely on existing Django configuration (and guard setup_django() behind __main__ / script entry points only).
+
+8. File: reviews/topic_modeling.py:19
+   Category: Best Practice
+   Severity: Medium
+   Issue: Calling django.setup() at import time causes side effects whenever the module is imported inside Django, slowing startup and complicating testing.
+   Recommendation: Only invoke setup inside executable scripts or a guarded function.
+
+9. File: reviews/views.py:19-21
+   Category: Security
+   Severity: High
+   Issue: ReviewListView exposes every Review in the database to any authenticated user, ignoring project ownership and leaking tenants' data.
+   Recommendation: Restrict the queryset to reviews tied to the requesting user’s projects (e.g., via joins) and apply explicit permission classes.
+
+10. File: reviews/views.py:24-130 & 350-404
+    Category: Security
+    Severity: High
+    Issue: enhanced_insights_summary, market_mentions, and task_status lack explicit permission decorators and rely on global defaults; if the base settings load, they become anonymous entry points.
+    Recommendation: Add @permission_classes([IsAuthenticated]) (or AllowAny intentionally) on each endpoint to encode required access regardless of settings.
+
+11. File: reviews/views.py:413-455
+    Category: Performance
+    Severity: Medium
+    Issue: check_background_tasks calls celery_app.control.inspect() on every API hit, a blocking, cluster-wide RPC that will slow requests at scale.
+    Recommendation: Cache/queue background task status outside the request cycle or expose a lightweight status cache instead of live inspect calls.
+
+12. File: reviews/views.py:456-457
+    Category: Code Quality
+    Severity: Low
+    Issue: Exceptions are printed to stdout instead of logged, making production diagnostics difficult.
+    Recommendation: Replace print() with structured logger.error calls.
+
+13. File: reviews/serializers.py:8
+    Category: Security
+    Severity: Medium
+    Issue: ReviewSerializer exposes all model fields (fields='__all__'), potentially returning internal flags like counts_toward_score, project identifiers, etc.
+    Recommendation: Whitelist only the fields intended for clients.
+
+14. File: reviews/tasks.py:46-58
+    Category: Code Quality
+    Severity: High
+    Issue: In collect_reviews_task, if User.objects.get raises User.DoesNotExist the except block still references the undefined user variable, causing an UnboundLocalError and killing the task.
+    Recommendation: Resolve the user lookup separately (and allow None) before creating the TaskTracker.
+
+15. File: reviews/tasks.py:125-148 & 634-724
+    Category: Security
+    Severity: Medium
+    Issue: The Celery tasks print raw review content, timestamps, and RSS snippets to stdout, risking PII leakage in logs.
+    Recommendation: Replace debug prints with redacted logger.debug statements guarded by DEBUG flags (or remove entirely for production).
+
+16. File: reviews/tasks.py:624
+    Category: Reliability
+    Severity: Medium
+    Issue: import_apple_app_store_reviews performs requests.get without a timeout, so a slow Apple endpoint can hang the worker indefinitely despite retry settings.
+    Recommendation: Supply a finite timeout (e.g., 10-15s) to every outbound request.
+
+17. File: reviews/tasks.py:63, 350, 424, 652
+    Category: Performance
+    Severity: Medium
+    Issue: The HuggingFace sentiment pipeline is re-created for every task invocation, adding heavy model loads and repeated downloads.
+    Recommendation: Instantiate the pipeline once per worker (module-level singleton) and reuse it across tasks.
+
+18. File: reviews/project_views.py:332-335
+    Category: Security
+    Severity: Critical
+    Issue: Deleting a project removes all Review rows for the associated app_id(s), wiping data collected for other users who track the same app.
+    Recommendation: Scope deletions to user-owned data (e.g., link reviews to projects or mark ownership) instead of deleting shared records.
+
+19. File: reviews/project_views.py:81, 234, 252
+    Category: Code Quality
+    Severity: Low
+    Issue: Error paths rely on print statements, so failures are not recorded in structured logs.
+    Recommendation: Switch to logger.error with contextual metadata.
+
+20. File: reviews/project_views.py:393-395
+    Category: Security
+    Severity: Medium
+    Issue: task_status returns raw exception text to clients on failure, revealing internal state and stack information.
+    Recommendation: Log the exception server-side and return a generic error message plus correlation ID.
+
+21. File: reviews/task_views.py:208-210
+    Category: Security
+    Severity: Medium
+    Issue: start_analysis leaks underlying exception strings in the HTTP response, which can disclose infrastructure details.
+    Recommendation: Return a generic failure message and log the specific exception internally.
+
+22. File: reviews/task_views.py:61-96
+    Category: Performance
+    Severity: Medium
+    Issue: project_analysis_status issues a Review aggregation query per app entry (home + each competitor), leading to N+1 queries as projects grow.
+    Recommendation: Precompute aggregates for all relevant app_ids in one query (values/annotate) and reuse the results.
+
+23. File: reviews/views.py:185-199
+    Category: Performance
+    Severity: Medium
+    Issue: competitor_analysis loops over app_ids and performs a separate aggregate query for each, creating N+1 database access.
+    Recommendation: Batch the aggregations (e.g., aggregate over the full app_id list once and map results in Python).
+
+24. File: reviews/competitor_services.py:5-6
+    Category: Code Quality
+    Severity: High
+    Issue: The module imports CompetitorPlatform and CompetitorSerializer, which do not exist, so importing this service raises ImportError.
+    Recommendation: Remove or fix the stale imports and ensure the serializer/model exist before wiring this module into production code.
+
+25. File: reviews/models.py:8-19
+    Category: Performance
+    Severity: Medium
+    Issue: app_id lacks a database index despite being the primary filter key across queries, producing table scans on large datasets.
+    Recommendation: Add db_index=True (and consider composite indexes for app_id/counts_toward_score combinations).
+
+26. File: deepfocal_backend/settings.py:64
+    Category: Code Quality
+    Severity: Low
+    Issue: DATABASES['default']['OPTIONS']['charset'] is not a valid PostgreSQL option and will be ignored or cause confusion.
+    Recommendation: Remove the MySQL-specific charset option.
+
+27. File: reviews/auth_views.py:14-69
+    Category: Security
+    Severity: Medium
+    Issue: Registration and login endpoints have no throttling or lockout, enabling credential stuffing and brute-force attempts.
+    Recommendation: Add DRF throttling (ScopedRateThrottle) or integrate with django-axes/limiter for sensitive endpoints.
+
+28. File: reviews/auth_views.py:93-99
+    Category: Code Quality
+    Severity: Low
+    Issue: logout wraps request.user.auth_token.delete() in a bare except, swallowing the actual failure reason and making debugging difficult.
+    Recommendation: Catch specific exceptions or remove the blanket handler and let DRF propagate meaningful errors.
+
+Summary Statistics
+------------------
+Total findings: 28
+- Critical: 3
+- High: 6
+- Medium: 15
+- Low: 4

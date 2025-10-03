@@ -42,11 +42,16 @@ def collect_reviews_task(self, app_id, max_reviews, user_id=None, subscription_t
     logger.info(f"Starting review collection for app: {app_id}, max: {max_reviews}, user: {user_id}, tier: {subscription_tier}")
 
     # Get or create TaskTracker record
+    user = None
+    if user_id:
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            logger.error('User %s not found for task tracking', user_id)
+            return f'User {user_id} not found for task tracking'
     try:
-        user = User.objects.get(id=user_id) if user_id else None
         tracker = TaskTracker.objects.get(task_id=self.request.id)
-    except (TaskTracker.DoesNotExist, User.DoesNotExist):
-        # Create new tracker if not exists
+    except TaskTracker.DoesNotExist:
         tracker = TaskTracker.objects.create(
             task_id=self.request.id,
             task_type=task_type,
@@ -56,7 +61,6 @@ def collect_reviews_task(self, app_id, max_reviews, user_id=None, subscription_t
             target_reviews=max_reviews,
             status='started'
         )
-
     # Update task as started
     tracker.update_progress(0, max_reviews, 'started')
 
@@ -324,6 +328,7 @@ def import_web_mentions(app_name, max_results=30):
 
     try:
         service = build('customsearch', 'v1', developerKey=api_key, cache_discovery=False)
+        service._http.timeout = 10
         all_items = []
         for page in range(3):
             start_index = (page * 10) + 1
@@ -460,7 +465,7 @@ def import_reddit_mentions(app_name, max_results=100):
     }
 
     try:
-        response = requests.get('https://www.reddit.com/search.json', headers=headers, params=search_params, timeout=15)
+        response = requests.get('https://www.reddit.com/search.json', headers=headers, params=search_params, timeout=10)
         response.raise_for_status()
         search_payload = response.json()
     except Exception as exc:
@@ -523,7 +528,7 @@ def import_reddit_mentions(app_name, max_results=100):
                 comments_url,
                 headers=headers,
                 params=comment_params,
-                timeout=15
+                timeout=10
             )
             comments_response.raise_for_status()
             comments_payload = comments_response.json()
@@ -621,7 +626,7 @@ def import_apple_app_store_reviews(app_id, user_id=None, subscription_tier='free
     )
 
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=15)
         response.raise_for_status()
     except requests.RequestException as exc:
         logger.error(

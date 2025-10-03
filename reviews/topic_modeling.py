@@ -4,20 +4,6 @@ LDA Topic Modeling implementation for automatic theme discovery in app reviews
 Replaces basic keyword matching with unsupervised machine learning
 """
 
-import os
-import django
-import sys
-
-
-def setup_django():
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    sys.path.append(project_root)
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'deepfocal_backend.settings_local')
-    django.setup()
-
-
-setup_django()
-
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
@@ -26,7 +12,6 @@ import re
 from collections import Counter, defaultdict
 from .models import Review
 from .app_id_utils import expand_app_ids
-
 
 class TopicModelingEngine:
     """
@@ -639,3 +624,7 @@ def run_topic_analysis_task(app_id, sentiment_filter=None):
 def run_competitive_topic_analysis_task(app_ids, sentiment_filter=None):
     """Celery task for competitive topic analysis"""
     return compare_topics_across_apps(app_ids, sentiment_filter)
+
+if __name__ == "__main__":
+    import django
+    django.setup()

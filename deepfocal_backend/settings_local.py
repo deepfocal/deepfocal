@@ -1,12 +1,11 @@
 # deepfocal_backend/settings_local.py
 import os
-from .settings import *
-
-# Load environment variables from .env file
 from dotenv import load_dotenv
 
-# Load .env file from project root
+# Load .env file FIRST, before importing settings
 load_dotenv()
+
+from .settings import *
 
 # Security: All sensitive data now comes from environment variables
 DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
@@ -31,7 +30,7 @@ if not SECRET_KEY:
 GOOGLE_SEARCH_API_KEY = os.getenv('GOOGLE_SEARCH_API_KEY')
 GOOGLE_SEARCH_ENGINE_ID = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
 
-# Rest of your existing settings...
+# Redis and Celery configuration
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
@@ -40,7 +39,7 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
-# ADD THE CACHING CONFIG RIGHT AFTER YOUR CELERY SETTINGS:
+# Cache configuration
 CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
@@ -89,8 +88,6 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_CREDENTIALS = True
-
-# No scheduled tasks; sentiment aggregates compute directly from reviews
 
 CELERY_TASK_ALWAYS_EAGER = False
 CELERY_WORKER_POOL = 'solo'

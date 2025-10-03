@@ -1,0 +1,46 @@
+Auth Method
+-----------
+- Backend uses DRF TokenAuthentication with a global default of IsAuthenticated when running under settings_local.py (deepfocal_backend/settings_local.py:104-109); register/login endpoints mint persistent tokens via reviews/auth_views.py:14 and reviews/auth_views.py:43.
+- Base deepfocal_backend/settings.py:102 lacks default auth/permission classes, so switching to that settings module would silently fall back to Session/Basic auth and make most endpoints public.
+
+Endpoint Access
+---------------
+- Protected (enforced either by decorators or the global default): competitor and insights APIs (reviews/views.py:134, reviews/views.py:252, reviews/views.py:350), all project/task routes (reviews/project_views.py:17, reviews/project_views.py:132, reviews/task_views.py:12, reviews/task_views.py:85), dashboard analytics (reviews/dashboard_views.py:12, reviews/dashboard_views.py:24, reviews/dashboard_views.py:46), and user profile/logout (reviews/auth_views.py:76, reviews/auth_views.py:93).
+- Public/AllowAny: auth registration & login (reviews/auth_views.py:10, reviews/auth_views.py:43) and the static demo dashboard (reviews/demo_views.py:6).
+- Reliant on global defaults (no decorator): review list, enhanced insights, market mentions, and task status (reviews/views.py:20, reviews/views.py:24, reviews/views.py:106, reviews/views.py:398). These stay protected today but would become anonymous-entry points if the project ever runs without settings_local.
+
+User Management
+---------------
+- Supports self-service registration and login with immediate token issuance (reviews/auth_views.py:26, reviews/auth_views.py:50).
+- Profile endpoint returns subscription metadata while logout simply deletes the stored token (reviews/auth_views.py:76, reviews/auth_views.py:93).
+- No flows for password reset, email verification, or token rotation.
+
+Data Isolation
+--------------
+- Ownership enforced through model relationships and per-request filtering: Project.user connects resources to a single account (reviews/models.py:45), and every project/competitor/task handler scopes queries to request.user (reviews/project_views.py:148, reviews/task_views.py:20).
+- Raw reviews are global, but analytics endpoints always verify project ownership before exposing aggregates (reviews/views.py:151, reviews/dashboard_views.py:15).
+
+Frontend Handling
+-----------------
+- Tokens persist in localStorage and are attached as Authorization: Token ... headers via the shared axios client (deepfocal-frontend/src/apiClient.js:7-21, deepfocal-frontend/src/AuthContext.jsx:21).
+- AuthContext hydrates the user by calling /api/auth/profile/ and gates dashboard rendering on isAuthenticated (deepfocal-frontend/src/AuthContext.jsx:29, deepfocal-frontend/src/App.jsx:17).
+- Client logout only clears local state; it never calls the server-side logout endpoint, leaving the token valid in the database (deepfocal-frontend/src/AuthContext.jsx:88).
+- LoginForm advertises demo credentials and the UI can hit the unauthenticated /api/demo/dashboard/ route for sample data (deepfocal-frontend/src/LoginForm.jsx:142, reviews/demo_views.py:6).
+
+Demo Setup
+----------
+- Demo data is served anonymously from reviews/demo_views.py:6; the "testuser/testpass123" hint in the UI has no accompanying backend seed or guard.
+
+Gaps & Risks
+------------
+- Reliance on settings_local means production deployments using deepfocal_backend/settings.py would lose TokenAuthentication and default permissions—formalizing that config in the base settings is critical.
+- Endpoints without explicit @permission_classes (enhanced insights, market mentions, task status, review list) should declare intent to avoid regressions if defaults change.
+- Tokens never expire and the frontend doesn’t invalidate them server-side, so leaked tokens remain valid indefinitely.
+- No brute-force protection or throttling on login, and no password management flows.
+- Duplicate task-status endpoints (reviews/views.py:398 vs reviews/project_views.py:313) can desync behaviors.
+
+Next Steps
+----------
+1. Promote the TokenAuthentication/IsAuthenticated defaults into settings.py and add explicit decorators on currently implicit endpoints.
+2. Have the frontend call /api/auth/logout/ and/or introduce token expiry or rotation.
+3. Seed or remove the advertised demo credentials to prevent confusion.

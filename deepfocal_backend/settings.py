@@ -1,9 +1,12 @@
-﻿# In settings.py
+import os
+# In settings.py
 
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-SECRET_KEY = 'django-insecure-p*)p5a(*16u)h#2cj&jgcy8042&lidc)i9eeklh6ov#-&lluzt'
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY environment variable must be set")
 DEBUG = True # This is okay for now, but in production this should be False
 DEFAULT_CHARSET = 'utf-8'
 FILE_CHARSET = 'utf-8'
@@ -102,6 +105,12 @@ CORS_ALLOW_CREDENTIALS = True
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
     ],
     'UNICODE_JSON': True,
     'CHARSET': 'utf-8',
